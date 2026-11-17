@@ -1,4 +1,4 @@
-# dsh-harness-jarvis · Jarvis
+# dsh-jarvis-windows · Jarvis
 
 English | [中文](README.md)
 
@@ -65,10 +65,10 @@ Source install for now; the native panel needs macOS 14+ and the Swift 6 toolcha
    ```json
    {
      "dependencies": {
-       "dsh-harness-jarvis": "link:/absolute/path/to/dsh-harness-jarvis"
+       "dsh-jarvis-windows": "link:/absolute/path/to/dsh-jarvis-windows"
      },
      "dsh": {
-       "profile": { "bundles": ["dsh-harness-jarvis"] }
+       "profile": { "bundles": ["dsh-jarvis-windows"] }
      }
    }
    ```

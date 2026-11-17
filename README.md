@@ -1,4 +1,4 @@
-# dsh-harness-jarvis · 贾维斯
+# dsh-jarvis-windows · 贾维斯
 
 [English](README.en.md) | 中文
 
@@ -65,10 +65,10 @@
    ```json
    {
      "dependencies": {
-       "dsh-harness-jarvis": "link:/absolute/path/to/dsh-harness-jarvis"
+       "dsh-jarvis-windows": "link:/absolute/path/to/dsh-jarvis-windows"
      },
      "dsh": {
-       "profile": { "bundles": ["dsh-harness-jarvis"] }
+       "profile": { "bundles": ["dsh-jarvis-windows"] }
      }
    }
    ```

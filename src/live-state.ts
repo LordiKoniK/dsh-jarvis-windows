@@ -6,7 +6,7 @@
  * Held requests race the panel against the rest of the answerer chain (the
  * DSH window), so whichever answers first wins and the other one unmounts.
  *
- * @module dsh-harness-jarvis/live-state
+ * @module dsh-jarvis-windows/live-state
  */
 import { randomUUID } from 'node:crypto';
 

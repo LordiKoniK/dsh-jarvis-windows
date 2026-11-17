@@ -14,7 +14,7 @@
  * DSH settings update runtime preferences, including opt-in low-risk question answering.
  * Pure logic lives in sibling modules so it can be tested without DSH.
  *
- * @module dsh-harness-jarvis
+ * @module dsh-jarvis-windows
  */
 import type { Context } from '@deepseek-ai/cordis';
 import z from '@deepseek-ai/schemastery';
@@ -147,7 +147,7 @@ async function readTitleMap(ctx: Context, ids: string[]): Promise<{ map: Record<
 }
 
 /** /jarvis/input wraps session-targeted text in this instruction; history shows the original. */
-export const name = 'dsh-harness-jarvis';
+export const name = 'dsh-jarvis-windows';
 
 /** Hard-required services. llm / systemPrompt / webServer / settings deferred. */
 export const inject = ['tools', 'userQuestions', 'jobs'] as const;
@@ -347,7 +347,7 @@ interface JarvisWebServer {
  *  an initial load keep answering /jarvis/* from a closure whose Session had
  *  already been detached, while every later apply looked like it had not been
  *  loaded at all. A `Symbol.for` slot lives on the process, not the module. */
-const ROUTE_SLOT = Symbol.for('dsh-harness-jarvis:/jarvis-route');
+const ROUTE_SLOT = Symbol.for('dsh-jarvis-windows:/jarvis-route');
 
 /** The slot table, typed once. */
 function routeSlot(): Record<symbol, unknown> {
@@ -616,7 +616,7 @@ export function apply(ctx: Context, rawConfig: unknown): (() => void) | void {
     cwd: resolveDir(entry.jarvisCwd),
   });
   debug(entry, 'provided "jarvis" service (sessionId=' + entry.jarvisSessionId + ')');
-  ctx.logger?.warn?.('dsh-harness-jarvis: provided "jarvis" service');
+  ctx.logger?.warn?.('dsh-jarvis-windows: provided "jarvis" service');
   let llm: unknown;
   const completion = new CompletionJudge({
     ledger,
@@ -645,7 +645,7 @@ export function apply(ctx: Context, rawConfig: unknown): (() => void) | void {
   ctx.inject(['llm' as any], (llmCtx: Context) => {
     debug(entry, 'llm inject fired');
     llm = (llmCtx as any).get('llm');
-    ctx.logger?.warn?.('dsh-harness-jarvis: llm attached');
+    ctx.logger?.warn?.('dsh-jarvis-windows: llm attached');
   });
   // Filled once webServer injects; the disposer below releases it.
   let disposeRoute: (() => void) | null = null;
@@ -967,7 +967,7 @@ export function apply(ctx: Context, rawConfig: unknown): (() => void) | void {
     } catch (e) { debug(entry, 'agent model auto-resolve failed: ' + (e instanceof Error ? e.message : String(e))); }
     if (!agents || typeof agents.create !== 'function') {
       debug(entry, 'agents service NOT found (get returned undefined)');
-      ctx.logger?.warn?.('dsh-harness-jarvis: agents service not found');
+      ctx.logger?.warn?.('dsh-jarvis-windows: agents service not found');
       return;
     }
     agentModelSelected = true;
@@ -985,7 +985,7 @@ export function apply(ctx: Context, rawConfig: unknown): (() => void) | void {
       jarvisReady = true;
       setJarvisTitle();
       debug(entry, 'Jarvis agent ready (' + (settled.existed ? 'resumed' : 'created') + ')');
-      ctx.logger?.warn?.('dsh-harness-jarvis: Jarvis agent ready (' + (settled.existed ? 'resumed' : 'created') + ')');
+      ctx.logger?.warn?.('dsh-jarvis-windows: Jarvis agent ready (' + (settled.existed ? 'resumed' : 'created') + ')');
       // First install: the session did not exist, so one LLM turn brings it to
       // life. A restart has history already and needs no turn of its own.
       if (!settled.existed) kickstartJarvis(settled.handle, entry);

@@ -1,4 +1,4 @@
-# dsh-harness-jarvis bundle layer. Configure provider/model for your profile.
+# dsh-jarvis-windows bundle layer. Configure provider/model for your profile.
 # Required inject services: tools, userQuestions, jobs.
 # agentLoop creates Jarvis; llm, systemPrompt, webServer, settings and title
 # services are attached by the plugin when available, not instantiated here.
@@ -9,8 +9,8 @@
 # (SPEC §9.1) — NOT declared in deployment cordis.yml. The provider/model/cwd
 # below configure that createAgent call.
 - insert:
-    - id: dsh-harness-jarvis
-      name: 'dsh-harness-jarvis'
+    - id: dsh-jarvis-windows
+      name: 'dsh-jarvis-windows'
       config:
         locale: zh                 # zh | en
         audioDir: ~/.dsh/jarvis    # speech cache and debug.log

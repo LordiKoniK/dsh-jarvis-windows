@@ -1,5 +1,5 @@
 {
-  "name": "dsh-harness-jarvis",
+  "name": "dsh-jarvis-windows",
   "version": "0.7.1",
   "description": "A floating desktop assistant for DSH Desktop — a particle orb for quick permission approvals and fast floating conversations.",
   "license": "MIT",
@@ -13,11 +13,11 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/CroissanTTs/dsh-harness-jarvis.git"
+    "url": "git+https://github.com/LordiKoniK/dsh-jarvis-windows.git"
   },
-  "homepage": "https://github.com/CroissantTTs/dsh-harness-jarvis#readme",
+  "homepage": "https://github.com/LordiKoniK/dsh-jarvis-windows#readme",
   "bugs": {
-    "url": "https://github.com/CroissantTTs/dsh-harness-jarvis/issues"
+    "url": "https://github.com/LordiKoniK/dsh-jarvis-windows/issues"
   },
   "main": "./lib/index.js",
   "exports": {

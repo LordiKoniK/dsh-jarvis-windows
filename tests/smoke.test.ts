@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { checkState, checkWait, checkMessages, checkStatus, checkManagedState, checkRuntime, runManagedRoundTrip } from '../scripts/smoke.mjs';
 
 const session = { id: 'worker', title: 'Worker', status: 'idle', managed: false };
-const state = (sessions = [session]) => ({ status: 200, body: { sessions, voice: {}, pending: [] } });
+const state = (sessions = [session]) => ({ status: 200, body: { sessions, pending: [] } });
 const runtime = { origin: 'http://127.0.0.1:1234', token: 'secret', rendererHeader: { name: 'X-Renderer', value: 'renderer-secret' } };
 const ok = (result: { passed: boolean }) => assert.equal(result.passed, true);
 const bad = (result: { passed: boolean; reason?: string }) => {
@@ -79,7 +79,7 @@ describe('边界值', () => {
 
 describe('异常路径', () => {
   it('rejects malformed state envelopes and session fields', () => {
-    for (const body of [null, [], {}, { sessions: [], voice: [], pending: [] }, { sessions: [], voice: {}, pending: {} }]) {
+    for (const body of [null, [], {}, { sessions: [], pending: {} }, { pending: [] }, { sessions: {} }]) {
       bad(checkState({ status: 200, body }));
     }
     for (const row of [null, {}, { ...session, id: '' }, { ...session, title: 1 }, { ...session, status: null }, { ...session, managed: 'false' }]) {

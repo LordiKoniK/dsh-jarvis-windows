@@ -9,9 +9,7 @@ const cell = value => String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;')
 /** Public configuration surface: only assistant-relevant fields are documented
  *  in the README. Fields belonging to mechanisms that are not part of the
  *  current release stay internal (still configurable, just not advertised). */
-export const PUBLIC_FIELDS = new Set([
-  'locale', 'audioDir', 'ttsBackend', 'edgeVoice', 'greetings', 'provider', 'model', 'reasoningEffort',
-]);
+export const PUBLIC_FIELDS = new Set(['provider', 'model', 'reasoningEffort']);
 
 /** Accept schemas as values so tests can use source Config without a build. */
 export function renderConfigTable(config, settings) {
@@ -31,7 +29,11 @@ export function replaceConfigTable(readme, table) {
   const start = readme.indexOf(START), end = readme.indexOf(END);
   if (start < 0 || end < start || readme.indexOf(START, start + START.length) !== -1 ||
       readme.indexOf(END, end + END.length) !== -1) throw Error('Invalid README configuration markers');
-  return readme.slice(0, start + START.length) + '\n' + table + '\n' + readme.slice(end);
+  // Keep the file's own line endings: a checkout with core.autocrlf leaves the
+  // README as CRLF, and emitting bare LF rows would make the check never settle.
+  const eol = readme.includes('\r\n') ? '\r\n' : '\n';
+  const rows = table.split('\n').join(eol);
+  return readme.slice(0, start + START.length) + eol + rows + eol + readme.slice(end);
 }
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {

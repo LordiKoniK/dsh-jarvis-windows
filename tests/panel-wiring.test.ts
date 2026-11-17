@@ -13,14 +13,13 @@ let disposers: (() => void)[];
 let children: any[];
 let timers: { callback: () => void; delay: number; cleared: boolean; unrefs: number }[];
 let injections: (() => void)[];
-let speech: string[];
 let now: number;
 let missing: boolean;
 let spawnFailure: Error | undefined;
 
 beforeEach(() => {
   dir = fs.mkdtempSync(join(tmpdir(), 'jv-panel-wiring-'));
-  disposers = []; children = []; timers = []; injections = []; speech = [];
+  disposers = []; children = []; timers = []; injections = [];
   now = 0; missing = false; spawnFailure = undefined;
   const exists = fs.existsSync;
   mock.method(fs, 'existsSync', (path: fs.PathLike) => String(path).endsWith('/macos/jarvis-panel') ? !missing : exists(path));
@@ -42,10 +41,6 @@ beforeEach(() => {
     return timer;
   });
   mock.method(globalThis, 'clearTimeout', (timer: any) => { if (timer) timer.cleared = true; });
-  mock.method(globalThis, 'fetch', async (_url: any, options: any) => {
-    if (options?.method === 'POST') speech.push(JSON.parse(options.body).text);
-    return { ok: true, status: 200 };
-  });
 });
 
 afterEach(() => {
@@ -65,16 +60,10 @@ function start(deferred = false): () => void {
     },
     provide() {}, on() {}, logger: { warn() {} },
   };
-  const firstApplyTimer = timers.length;
   const dispose = apply(context, {
-    audioDir: dir, memoryRoot: dir, lockFile: join(dir, 'lock.json'), managedFile: join(dir, 'managed.json'), tasksFile: join(dir, 'tasks.json'),
+    memoryRoot: dir, lockFile: join(dir, 'lock.json'), managedFile: join(dir, 'managed.json'), tasksFile: join(dir, 'tasks.json'),
     runtimeFile: join(dir, 'runtime.json'),
   })!;
-  // apply schedules startup cache maintenance before services can spawn a panel.
-  // Isolate that exact registration, not all 30s timers: backoff also reaches 30s.
-  const [maintenanceTimer] = timers.splice(firstApplyTimer, 1);
-  assert.equal(maintenanceTimer?.delay, 30_000);
-  assert.equal(maintenanceTimer?.unrefs, 1);
   disposers.push(dispose);
   return dispose;
 }
@@ -121,7 +110,6 @@ describe('边界值', () => {
     crash(); child.emit('exit', 1, null); child.emit('error', new Error('late error'));
     await flush();
     assert.equal(children.length, 4);
-    assert.deepEqual(speech, ['The panel kept crashing, so automatic restarts have stopped']);
     assert.match(fs.readFileSync(join(dir, 'debug.log'), 'utf8'), /panel.*crash-limit/);
     assert.equal(timers.filter(timer => timer.unrefs === 1).length, 3);
   });

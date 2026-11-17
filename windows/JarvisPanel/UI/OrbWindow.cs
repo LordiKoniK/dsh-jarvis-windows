@@ -8,8 +8,8 @@ using JarvisPanel.Core;
 namespace JarvisPanel.UI;
 
 /// <summary>
-/// The orb: a 140pt layered window holding the particle cloud, the badge and a
-/// one-line caption. It is the Windows counterpart of macOS's <c>OrbPanel</c>
+/// The orb: a 140pt layered window holding the particle cloud and the badge. It is
+/// the Windows counterpart of macOS's <c>OrbPanel</c>
 /// plus the parts of <c>AppController</c> that drive the orb itself — press,
 /// drag, snap, strip dock, hover and the context menu.
 /// </summary>
@@ -34,8 +34,6 @@ internal sealed class OrbWindow : LayeredWindow
     private const int MinTimerMs = 8;
     private const double CollapseDelay = 0.4;
     private const double TapMaxSeconds = 0.6;
-    private const double CaptionHeight = 26;
-    private const double CaptionGap = 6;
     private const double DefaultEdgeMargin = 16;
     private const int MaxBadgeCount = 99;
 
@@ -47,7 +45,6 @@ internal sealed class OrbWindow : LayeredWindow
     private readonly System.Windows.Forms.Timer _hoverTimer;
     private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
     private readonly Font _badgeFont = Theme.Font(7.5f, FontStyle.Bold);
-    private readonly Font _captionFont = Theme.Font(8f);
 
     /// <summary>Screen-space edge the orb is snapped to; kept even while the strip is open.</summary>
     private DockEdge? _edge;
@@ -200,7 +197,6 @@ internal sealed class OrbWindow : LayeredWindow
     {
         var now = Now;
         if (!_dragging) _model.ExpireEscapeHint();
-        _model.ExpireCaptions();
 
         if (!_visible)
         {
@@ -289,7 +285,7 @@ internal sealed class OrbWindow : LayeredWindow
     // ------------------------------------------------------------------- drawing
 
     /// <summary>
-    /// The one frame the base class asks for: particles, then badge, then caption.
+    /// The one frame the base class asks for: particles, then badge.
     /// The canvas is already cleared by <see cref="LayeredWindow.Redraw"/>, which
     /// also flushes the result.
     /// </summary>
@@ -329,7 +325,6 @@ internal sealed class OrbWindow : LayeredWindow
         }
 
         if (_appearance.Badge is { } badge) DrawBadge(badge, alpha);
-        DrawCaption(alpha);
     }
 
     private void DrawBadge(Badge badge, int alpha)
@@ -411,50 +406,6 @@ internal sealed class OrbWindow : LayeredWindow
             DockEdge.Top => new PointF(Width - inset, inset),
             _ => new PointF(Width - inset, Height - inset),
         };
-    }
-
-    /// <summary>
-    /// The spoken line as a dark pill beside the orb. Stage A only draws it; the
-    /// full caption surface (placement rules, motion, per-session styling) is Stage B.
-    /// </summary>
-    private void DrawCaption(int alpha)
-    {
-        if (_model.CaptionText is not { Length: > 0 } text) return;
-
-        var height = ScreenMetrics.Pxf(CaptionHeight);
-        var gap = ScreenMetrics.Pxf(CaptionGap);
-        var x = 0f;
-        var y = Height + gap;
-
-        // Docked to the bottom there is no room below the window, so the caption
-        // flips above it instead of hanging off the edge of the screen.
-        if (Screen.FromControl(this).WorkingArea.Bottom < Top + y + height) y = -height - gap;
-
-        var rect = new RectangleF(x, y, Width, height);
-        using (var path = Theme.RoundedRect(rect, ScreenMetrics.Pxf(Theme.Radius)))
-        using (var fill = new SolidBrush(Color.FromArgb((int)(alpha * 0.72), Theme.Surface)))
-        using (var stroke = new Pen(Color.FromArgb((int)(alpha * 0.35), Theme.Stroke), 1f))
-        {
-            G.FillPath(fill, path);
-            G.DrawPath(stroke, path);
-        }
-
-        // ClearType cannot be used on a transparent canvas; AntiAlias is the only
-        // hint that produces sane edges here.
-        G.TextRenderingHint = TextRenderingHint.AntiAlias;
-        using (var brush = new SolidBrush(Color.FromArgb(alpha, Theme.Text)))
-        using (var format = new StringFormat
-               {
-                   Alignment = StringAlignment.Center,
-                   LineAlignment = StringAlignment.Center,
-                   Trimming = StringTrimming.EllipsisCharacter,
-                   FormatFlags = StringFormatFlags.NoWrap,
-               })
-        {
-            var inset = new RectangleF(rect.X + 10, rect.Y, Math.Max(1, rect.Width - 20), rect.Height);
-            G.DrawString(text, _captionFont, brush, inset, format);
-        }
-        G.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
     }
 
     /// <summary>Tint crossfade in sRGB, mirroring <c>OrbMetalView.apply</c>'s interpolation.</summary>
@@ -820,7 +771,6 @@ internal sealed class OrbWindow : LayeredWindow
             _frameTimer.Dispose();
             _hoverTimer.Dispose();
             _badgeFont.Dispose();
-            _captionFont.Dispose();
         }
         base.Dispose(disposing);
     }

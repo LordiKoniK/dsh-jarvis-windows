@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace JarvisPanel.Core;
 
-public enum Activity { Idle, Awaiting, Thinking, Speaking }
+public enum Activity { Idle, Awaiting, Thinking }
 
 public enum SessionStatus { Running, Waiting, Done, Failed, Idle }
 
@@ -10,15 +10,7 @@ public enum TaskStatus { Open, Judging, Unsatisfied }
 
 public enum PendingKind { Approval, Question }
 
-public enum SpeechSource { Jarvis, Session }
-
-public enum Narration { Session, Relay }
-
 public enum ConnectionKind { Connecting, Online, Offline }
-
-public enum HoverButton { Pause, Resume, Skip, Clear, Mute, Unmute, History }
-
-public enum VoiceAction { Pause, Resume, Skip, Clear, Mute, Unmute }
 
 public static class EnumText
 {
@@ -37,46 +29,6 @@ public static class EnumText
         SessionStatus.Done => "Finished",
         SessionStatus.Failed => "Failed",
         _ => "Idle",
-    };
-
-    public static string Label(this Narration n) => n == Narration.Session ? "Self report" : "Jarvis relay";
-
-    public static Narration Toggled(this Narration n) => n == Narration.Session ? Narration.Relay : Narration.Session;
-
-    public static string Label(this HoverButton b) => b switch
-    {
-        HoverButton.Pause => "Pause",
-        HoverButton.Resume => "Resume",
-        HoverButton.Skip => "Skip",
-        HoverButton.Clear => "Clear queue",
-        HoverButton.Mute => "Mute",
-        HoverButton.Unmute => "Unmute",
-        _ => "History",
-    };
-
-    public static VoiceAction? VoiceAction(this HoverButton b) => b switch
-    {
-        HoverButton.Pause => Core.VoiceAction.Pause,
-        HoverButton.Resume => Core.VoiceAction.Resume,
-        HoverButton.Skip => Core.VoiceAction.Skip,
-        HoverButton.Clear => Core.VoiceAction.Clear,
-        HoverButton.Mute => Core.VoiceAction.Mute,
-        HoverButton.Unmute => Core.VoiceAction.Unmute,
-        _ => null,
-    };
-
-    public static string Raw(this Narration n) => n == Narration.Session ? "self" : "relay";
-
-    // NOTE: bare `VoiceAction.X` would bind to the EnumText.VoiceAction(HoverButton)
-    // method above, so the enum is qualified through the enclosing namespace.
-    public static string Raw(this VoiceAction a) => a switch
-    {
-        Core.VoiceAction.Pause => "pause",
-        Core.VoiceAction.Resume => "resume",
-        Core.VoiceAction.Skip => "skip",
-        Core.VoiceAction.Clear => "clear",
-        Core.VoiceAction.Mute => "mute",
-        _ => "unmute",
     };
 
     public static string Label(this AutoApprovalTier t) => t switch
@@ -105,7 +57,6 @@ public sealed class TargetOption
     public string Label { get; init; } = "";
     public SessionStatus? Status { get; init; }
     public TaskInfo? Task { get; init; }
-    public Narration? Narration { get; init; }
 }
 
 public sealed class Counts
@@ -165,7 +116,6 @@ public sealed class SessionInfo
     public bool Unread { get; set; }
     public string? Workspace { get; set; }
     public bool Managed { get; set; } = true;
-    public Narration? Narration { get; set; }
     public TaskInfo? Task { get; set; }
 
     /// <summary>Display name without the "Jarvis-" / "[Jarvis]" worker prefix (SPEC §9.2).</summary>
@@ -199,14 +149,6 @@ public sealed class SessionInfo
             _ => SessionStatus.Idle,
         };
         var ws = J.Str(e, "workspace")?.Trim();
-        // `Narration` here would bind to the SessionInfo.Narration property, so the
-        // enum is qualified explicitly.
-        var narration = J.Str(e, "narration") switch
-        {
-            "self" => Core.Narration.Session,
-            "relay" => Core.Narration.Relay,
-            _ => (Core.Narration?)null,
-        };
         return new SessionInfo
         {
             Id = id,
@@ -215,7 +157,6 @@ public sealed class SessionInfo
             Unread = J.Bool(e, "unread"),
             Workspace = string.IsNullOrEmpty(ws) ? null : ws,
             Managed = J.Bool(e, "managed", true),
-            Narration = narration,
             Task = TaskInfo.Parse(J.Obj(e, "task")),
         };
     }
@@ -259,43 +200,11 @@ public sealed class PendingItem
     }
 }
 
-public sealed class VoiceState
-{
-    public bool Speaking { get; set; }
-    public SpeechSource? Source { get; set; }
-    public string? SessionId { get; set; }
-    public string? Text { get; set; }
-    public bool Muted { get; set; }
-    public bool Paused { get; set; }
-    public int Queued { get; set; }
-
-    /// <summary>Something is playing, parked, or waiting to play.</summary>
-    public bool Active => Speaking || Paused || Queued > 0;
-
-    public static VoiceState Parse(JsonElement? e)
-    {
-        var v = new VoiceState();
-        if (e is not { } el || el.ValueKind != JsonValueKind.Object) return v;
-        v.Speaking = J.Bool(el, "speaking");
-        if (v.Speaking)
-        {
-            v.Source = J.Str(el, "source") == "session" ? SpeechSource.Session : SpeechSource.Jarvis;
-            v.SessionId = J.Str(el, "sessionId");
-            v.Text = J.Str(el, "text");
-        }
-        v.Muted = J.Bool(el, "muted");
-        v.Paused = J.Bool(el, "paused");
-        v.Queued = Math.Max(0, J.Int(el, "queued"));
-        return v;
-    }
-}
-
 public sealed class Snapshot
 {
     public string AgentId { get; set; } = "";
     public Activity Activity { get; set; } = Activity.Idle;
     public string? Error { get; set; }
-    public VoiceState Voice { get; set; } = new();
     public Counts Counts { get; set; } = new();
     public List<SessionInfo> Sessions { get; set; } = new();
     public List<PendingItem> Pending { get; set; } = new();
@@ -318,15 +227,12 @@ public sealed class Snapshot
             foreach (var a in auto.EnumerateArray())
                 if (AutoApproval.Parse(a) is { } entry) s.AutoApprovals.Add(entry);
         }
-        var legacySpeaking = J.Bool(e, "speaking");
-        s.Voice = J.Obj(e, "voice") is { } voice ? VoiceState.Parse(voice) : new VoiceState { Speaking = legacySpeaking };
         s.Activity = J.Str(e, "activity") switch
         {
             "awaiting" => Activity.Awaiting,
             "thinking" => Activity.Thinking,
-            "speaking" => Activity.Speaking,
             "idle" => Activity.Idle,
-            _ => s.Voice.Speaking ? Activity.Speaking : Activity.Idle,
+            _ => Activity.Idle,
         };
         if (J.Arr(e, "sessions") is { } sessions)
         {

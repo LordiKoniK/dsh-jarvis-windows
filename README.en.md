@@ -7,10 +7,10 @@ English | [中文](README.md)
 ![macOS](https://img.shields.io/badge/platform-macOS_14%2B-lightgrey?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 
-Jarvis is a resident floating assistant for DSH Desktop — and a desktop pet with a pulse. When DSH raises a permission request, a card appears beside the orb: **Allow / Deny / Always allow (this workspace)** in one click, racing the main window, first answer wins. Anywhere else, `⌃⌥J` summons the quick input bar for a conversation with Jarvis, history inline. He greets you out loud on startup. His body is a Metal particle orb that breathes with its state — thinking, speaking, or waiting for your call each have their own motion — and dragging him to a screen edge melts him flat into the wall until a touch blooms him back.
+Jarvis is a resident floating assistant for DSH Desktop — and a desktop pet with a pulse. When DSH raises a permission request, a card appears beside the orb: **Allow / Deny / Always allow (this workspace)** in one click, racing the main window, first answer wins. Anywhere else, `⌃⌥J` summons the quick input bar for a conversation with Jarvis, history inline. His body is a Metal particle orb that breathes with its state — thinking or waiting for your call each have their own motion — and dragging him to a screen edge melts him flat into the wall until a touch blooms him back.
 
 <p align="center">
-  <img src="docs/design/orb-showcase.gif" width="320" alt="The orb cycling through its states: idle, awaiting, thinking, speaking, attention">
+  <img src="docs/design/orb-showcase.gif" width="320" alt="The orb cycling through its states: idle, awaiting, thinking, attention">
 </p>
 
 Version **0.7.1** is the *assistant* release: the capabilities above work out of the box; the bigger vision continues on the [roadmap](#roadmap).
@@ -19,18 +19,18 @@ Version **0.7.1** is the *assistant* release: the capabilities above work out of
 
 - 🔔 **Approvals** — DSH raises a permission request → the floating card appears: **Allow / Deny / Always allow (this workspace)** in one click. The panel races the DSH window, and the first answer wins — no window switching needed. Answer approvals where they find you.
 - ⌨️ **Floating chat** — the global shortcut `⌃⌥J` (default, remappable in panel settings) summons the quick input bar for a direct conversation with Jarvis; the history lives inline in the panel, one click away. One shortcut, with the log inline.
-- 🔊 **Spoken greeting** — Jarvis says hello when he starts up; greeting text and voice are configurable, and hovering the orb mutes him. A configurable, mutable startup greeting.
+- 🗣️ **One voice, borrowed** — Jarvis speaks out loud by calling the `speak` tool that another bundle registers (the `jarvis-tts` bundle plays it in the DSH browser page). This plugin has no speech engine of its own.
 - ✨ **Presence** — a Metal particle orb: five state motions, edge melting, hover wake, and the quiet patience of a desktop pet in the corner of your screen. Part status light, part companion.
 
-The loop below is one full interaction: summon the quick bar, type and send, watch Jarvis think and speak, then allow an approval with one click.
+The loop below is one full interaction: summon the quick bar, type and send, watch Jarvis think and answer, then allow an approval with one click.
 
 <p align="center">
-  <img src="docs/design/panel-tour.gif" width="520" alt="A full interaction: quick bar opens, typing, send, think, speak, one-click approval">
+  <img src="docs/design/panel-tour.gif" width="520" alt="A full interaction: quick bar opens, typing, send, think, answer, one-click approval">
 </p>
 
 ## The orb & design sketches
 
-Jarvis's body is a Metal particle field: a hexagonal core diffusing outward into two rings, with particles breathing between them. Idle, it floats quietly; thinking, speaking, attention, and failure each have their own motion. Drag it to a screen edge and the orb melts flat into the wall as a thin strip; touch it and it blooms back into a sphere.
+Jarvis's body is a Metal particle field: a hexagonal core diffusing outward into two rings, with particles breathing between them. Idle, it floats quietly; thinking, attention, and failure each have their own motion. Drag it to a screen edge and the orb melts flat into the wall as a thin strip; touch it and it blooms back into a sphere.
 
 - Interactive design sketches (clone the repo and open locally):
   - [docs/design/orb-states.html](docs/design/orb-states.html) — the particle motion of every state at actual sizes
@@ -82,7 +82,7 @@ Hard-required services are `tools`, `userQuestions`, and `jobs`; `agentLoop`, `l
 
 1. After restarting DSH, the floating orb appears on screen; press `⌃⌥J` to summon the input bar and start chatting.
 2. The next time DSH raises an approval, the panel shows the card — click once, or answer from the DSH main window; whichever answers first wins.
-3. Hover the orb for voice controls; expand the input area for the conversation log.
+3. Click the orb for the quick bar; expand the input area for the conversation log.
 
 ## Configuration
 
@@ -91,25 +91,20 @@ The table below is the public, user-facing surface, generated from the schema in
 <!-- CONFIG:START -->
 | 字段 / Field | 类型 / Type | 默认值 / Default | DSH 设置页 / Settings |
 |---|---|---|---|
-| `locale` | "zh" / "en" | `"zh"` | 否 / No |
-| `audioDir` | string | `"~/.dsh/jarvis"` | 否 / No |
-| `ttsBackend` | "" / "edge" / "kokoro" | `""` | 否 / No |
-| `edgeVoice` | string | `"zh-CN-YunjianNeural"` | 是 / Yes |
 | `provider` | string | `""` | 是 / Yes |
 | `model` | string | `""` | 是 / Yes |
 | `reasoningEffort` | string | `""` | 是 / Yes |
-| `greetings` | string[] | `[]` | 是 / Yes |
 <!-- CONFIG:END -->
 
-`locale` controls the greeting language, not a full panel translation; panel appearance and shortcut settings live in `~/.dsh/jarvis/panel.json`, and the connection credentials are written only to that local directory — keep it private.
+Panel appearance and shortcut settings live in `~/.dsh/jarvis/panel.json`, and the connection credentials are written only to that local directory — keep it private.
 
-## Working with voice-mini
+## How Jarvis speaks
 
-voice-mini is optional. When present, Jarvis prefers its narration and playback controls; without it, he falls back to the built-in edge-tts. Muting suppresses speech.
+This plugin owns no text-to-speech: no model download, no synthesis worker, no audio cache, and no voice buttons. Jarvis talks by calling the global `speak` tool, which the separate `jarvis-tts` bundle registers; that bundle synthesises the audio and plays it in the DSH browser page. Without `jarvis-tts` loaded the tool simply does not exist, and Jarvis answers in text only.
 
 ## Privacy and permissions
 
-Approval records, logs, and the voice cache are stored locally under `~/.dsh/jarvis` by default — no cloud storage. **Local storage is not offline processing**: your configured model provider receives the relevant conversation context, and the built-in edge-tts sends spoken text to Microsoft's speech service.
+Approval records and logs are stored locally under `~/.dsh/jarvis` by default — no cloud storage. **Local storage is not offline processing**: your configured model provider receives the relevant conversation context. Speech is handled by whichever bundle provides the `speak` tool, under that bundle's own terms.
 
 The plugin does not request `danger-full-access`; the shortcut uses Carbon RegisterEventHotKey and needs no accessibility keyboard monitoring; there is no microphone capture today. Approval records and logs may contain sensitive operation context — manage what you share.
 

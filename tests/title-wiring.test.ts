@@ -95,19 +95,10 @@ async function startPlugin(): Promise<void> {
   injections.length = 0;
   listeners.clear();
   dispose = apply(context, {
-    jarvisSessionId: session.id, audioDir: dir, memoryRoot: dir, lockFile: join(dir, 'lock.json'),
+    jarvisSessionId: session.id, memoryRoot: dir, lockFile: join(dir, 'lock.json'),
     managedFile: join(dir, 'managed.json'), tasksFile: join(dir, 'tasks.json'),
     runtimeFile: join(dir, 'runtime.json'),
   });
-  // The panel mutes the voice so the restart greeting stays silent in tests.
-  const req = Object.assign(new EventEmitter(), {
-    url: '/jarvis/voice', method: 'POST', socket: { remoteAddress: '127.0.0.1' },
-    headers: { authorization: `Bearer ${JSON.parse(readFileSync(join(dir, 'runtime.json'), 'utf8')).token}` },
-  });
-  const pending = handler(req, { writeHead() {}, end() {} });
-  req.emit('data', Buffer.from('{"action":"mute"}'));
-  req.emit('end');
-  await pending;
 }
 
 afterEach(() => {
@@ -156,7 +147,6 @@ describe('等价类', () => {
     assert.deepEqual(renames, [[session, 'Jarvis']]);
     // Resumed history means the greeting path, not the first-install kickstart.
     assert.equal(messages.length, 0);
-    assert.match(readFileSync(join(dir, 'debug.log'), 'utf8'), /speakGreeting:.*muted/);
   });
 
   it('标题已相同时读取一次但不追加 rename', async () => {

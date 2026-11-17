@@ -30,7 +30,6 @@ public sealed class PanelModel
 
     private readonly IJarvisApi _api;
     private readonly SettingsStore _store;
-    private readonly CaptionState _captionState = new();
     private readonly EscapeGate _escapeGate = new();
     private double _escapeHintUntil = -1;
     private readonly HashSet<string> _revokedAutoApprovalIds = new();
@@ -67,21 +66,9 @@ public sealed class PanelModel
     public bool HistoryExpanded { get; private set; }
     /// <summary>The pointer is over the orb: it shows standby, as when the quick bar is open.</summary>
     public bool Hovering { get; private set; }
-    public Caption? Caption { get; private set; }
     public string? ManagingId { get; private set; }
     public ApprovalRule.Identity? RevokingAutoApproval { get; private set; }
     public string? AutoApprovalError { get; private set; }
-
-    public string? CaptionText
-    {
-        get
-        {
-            if (Caption is not { } caption) return null;
-            if (caption.Source != SpeechSource.Session) return caption.Text;
-            var name = caption.SessionId is { } id ? LabelFor(Target.Session(id)) : "Another session";
-            return $"{name}: {caption.Text}";
-        }
-    }
 
     // MARK: Derived
 
@@ -121,7 +108,6 @@ public sealed class PanelModel
         Label = DisplayName(s),
         Status = s.Status,
         Task = s.Task,
-        Narration = s.Narration,
     };
 
     /// <summary>
@@ -165,26 +151,6 @@ public sealed class PanelModel
     public PendingItem? AnsweringItem
         => AnsweringId is { } id ? Snapshot?.Pending.FirstOrDefault(p => p.Id == id) : null;
 
-    /// <summary>Playback controls while voice is active, otherwise mute + history.</summary>
-    public List<HoverButton> HoverButtons
-    {
-        get
-        {
-            var voice = Snapshot?.Voice ?? new VoiceState();
-            if (voice.Active) return new List<HoverButton>
-            {
-                voice.Paused ? HoverButton.Resume : HoverButton.Pause,
-                HoverButton.Skip,
-                HoverButton.Clear,
-            };
-            return new List<HoverButton>
-            {
-                voice.Muted ? HoverButton.Unmute : HoverButton.Mute,
-                HoverButton.History,
-            };
-        }
-    }
-
     public string LabelFor(Target target)
     {
         if (target.IsJarvis) return JarvisLabel;
@@ -203,14 +169,10 @@ public sealed class PanelModel
         {
             Snapshot = await _api.SnapshotAsync();
             Connection = Connection.Online;
-            _captionState.Update(Snapshot.Voice, Now);
-            RefreshCaptions();
         }
         catch (Exception ex)
         {
             Connection = Connection.Offline(Describe(ex));
-            _captionState.Update(new VoiceState(), Now);
-            RefreshCaptions();
             Notify();
             return;
         }
@@ -219,9 +181,9 @@ public sealed class PanelModel
     }
 
     /// <summary>
-    /// Returns as soon as the host reports a change (speech start/end, turns,
-    /// pending) or after <paramref name="timeout"/>. Against a host without the
-    /// change feed, or while it is unreachable, this is a plain sleep.
+    /// Returns as soon as the host reports a change (turns, pending requests,
+    /// the managed set) or after <paramref name="timeout"/>. Against a host
+    /// without the change feed, or while it is unreachable, this is a plain sleep.
     /// </summary>
     public async Task WaitForChangeAsync(double timeout)
     {
@@ -253,23 +215,6 @@ public sealed class PanelModel
         if (Target == wanted)
         {
             Messages = list;
-            Notify();
-        }
-    }
-
-    public void RefreshCaptions()
-    {
-        Caption = _captionState.Caption(Now, _store.Settings.ShowCaptions);
-        Notify();
-    }
-
-    /// <summary>Called by the UI timer so a held caption expires without a host change.</summary>
-    public void ExpireCaptions()
-    {
-        var next = _captionState.Caption(Now, _store.Settings.ShowCaptions);
-        if (next != Caption)
-        {
-            Caption = next;
             Notify();
         }
     }
@@ -395,33 +340,6 @@ public sealed class PanelModel
         await RefreshAsync();
     }
 
-    /// <summary>
-    /// Flips who announces <paramref name="session"/>'s results. Shares the
-    /// managed-set guard so only one host change is in flight.
-    /// </summary>
-    public async Task ToggleNarrationAsync(string session)
-    {
-        if (ManagingId is not null) return;
-        var current = Snapshot?.Sessions.FirstOrDefault(s => s.Id == session && s.Managed)?.Narration;
-        if (current is not { } narration) return;
-        ManagingId = session;
-        Notify();
-        try
-        {
-            await _api.SetNarrationAsync(session, narration.Toggled());
-            SendError = null;
-        }
-        catch (Exception ex)
-        {
-            SendError = "Could not change narration: " + Describe(ex);
-            ManagingId = null;
-            Notify();
-            return;
-        }
-        ManagingId = null;
-        await RefreshAsync();
-    }
-
     /// <summary>Ctrl+1…Ctrl+9; 1-based, out-of-range numbers are ignored.</summary>
     public void SelectTargetByNumber(int number)
     {
@@ -516,7 +434,7 @@ public sealed class PanelModel
         await RefreshAsync();
     }
 
-    // MARK: History, DSH, voice
+    // MARK: History, DSH
 
     public async Task SetHistoryExpandedAsync(bool on)
     {
@@ -532,13 +450,6 @@ public sealed class PanelModel
     {
         try { await _api.OpenAsync(session); } catch { /* best effort */ }
         try { await _api.MarkReadAsync(session); } catch { /* best effort */ }
-    }
-
-    public async Task PressAsync(HoverButton button)
-    {
-        if (button.VoiceAction() is not { } action) return;
-        try { await _api.VoiceAsync(action); } catch { /* best effort */ }
-        await RefreshAsync();
     }
 
     /// <summary>Revoking the saved preset does not undo an operation that already ran.</summary>

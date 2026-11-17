@@ -14,9 +14,6 @@ public static class Placement
     /// <summary>Measured from the window edge, which sits 10pt outside the visible orb.</summary>
     public const double SnapDistance = 10;
     public const double DragThreshold = 4;
-    public const double ButtonRadius = 88;
-    public const double ButtonSize = 30;
-    public const double ButtonSpacingDegrees = 30;
     public const double ReadoutGap = 58;
     public const double CapsuleGap = 8;
     public const double CapsuleInset = 56;
@@ -174,23 +171,14 @@ public static class Placement
     public static HSide InteriorSide(PointD center, RectD visible)
         => (visible.MaxX - center.X) > (center.X - visible.MinX) ? HSide.Right : HSide.Left;
 
-    public static HoverLayout Hover(PointD center, RectD visible, int buttonCount, SizeD listSize, SizeD capsuleSize)
+    /// <summary>
+    /// The readout slot beside the orb. The hover fan of playback buttons that used
+    /// to sit between the two is gone, so the slot only has to stay on the monitor.
+    /// </summary>
+    public static HoverLayout Hover(PointD center, RectD visible, SizeD listSize, SizeD capsuleSize)
     {
         var side = InteriorSide(center, visible);
-        var baseDeg = side == HSide.Left ? 180.0 : 0.0;
-        var sign = side == HSide.Left ? -1.0 : 1.0;
-        var mid = (buttonCount - 1) / 2.0;
-        var buttons = new List<PointD>(buttonCount);
-        for (var i = 0; i < buttonCount; i++)
-        {
-            var deg = baseDeg + sign * (mid - i) * ButtonSpacingDegrees;
-            var rad = deg * Math.PI / 180;
-            buttons.Add(new PointD(center.X + Math.Cos(rad) * ButtonRadius, center.Y + Math.Sin(rad) * ButtonRadius));
-        }
-
-        var half = ButtonSize / 2;
-        var buttonRects = buttons.Select(b => new RectD(b.X - half, b.Y - half, ButtonSize, ButtonSize)).ToList();
-        bool Fits(RectD r) => visible.Contains(r) && !buttonRects.Any(b => b.Intersects(r));
+        bool Fits(RectD r) => visible.Contains(r);
 
         var listX = side == HSide.Left ? center.X + ReadoutGap : center.X - ReadoutGap - listSize.Width;
         var list = new RectD(listX, center.Y - listSize.Height / 2, listSize.Width, listSize.Height);
@@ -218,15 +206,13 @@ public static class Placement
         var bx = readoutOnRight ? 1.0 : -1.0;
         var badge = new PointD(center.X + bx * Math.Cos(Math.PI / 4) * OrbRadius,
                                center.Y - Math.Sin(Math.PI / 4) * OrbRadius);
-        return new HoverLayout(side, buttons, readout, badge);
+        return new HoverLayout(side, readout, badge);
     }
 
-    /// <summary>Audit card opens beyond the hover controls, leaving playback buttons accessible.</summary>
+    /// <summary>Audit card opens beyond the readout slot, leaving the orb clickable.</summary>
     public static RectD AutoApprovals(PointD center, RectD visible, HoverLayout hover, int count)
     {
         var occupied = new RectD(center.X - OrbRadius, center.Y - OrbRadius, OrbRadius * 2, OrbRadius * 2);
-        foreach (var button in hover.Buttons)
-            occupied = occupied.Union(new RectD(button.X - ButtonSize / 2, button.Y - ButtonSize / 2, ButtonSize, ButtonSize));
         if (hover.Readout.Rect is { } rect) occupied = occupied.Union(rect);
 
         var width = Math.Min(320, Math.Max(0, visible.Width - ScreenMargin * 2));
@@ -291,18 +277,15 @@ public readonly record struct ReadoutPlacement(ReadoutKind Kind, RectD Rect)
 
 public sealed class HoverLayout
 {
-    public HoverLayout(HSide side, List<PointD> buttons, ReadoutPlacement readout, PointD badge)
+    public HoverLayout(HSide side, ReadoutPlacement readout, PointD badge)
     {
         Side = side;
-        Buttons = buttons;
         Readout = readout;
         Badge = badge;
     }
 
-    /// <summary>Side of the orb the buttons open toward (the screen interior).</summary>
+    /// <summary>Side of the orb the readout opens toward (the screen interior).</summary>
     public HSide Side { get; }
-    /// <summary>Button centers, top to bottom.</summary>
-    public List<PointD> Buttons { get; }
     public ReadoutPlacement Readout { get; }
     public PointD Badge { get; }
 }

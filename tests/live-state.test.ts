@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  AWAITING_TIMEOUT_MS, LiveState, MAX_WAIT_MS, PENDING_GRACE_MS, SPEECH_STALE_MS,
+  AWAITING_TIMEOUT_MS, LiveState, MAX_WAIT_MS, PENDING_GRACE_MS,
   type ApprovalOutcome, type QuestionAnswer,
 } from '../src/live-state.ts';
 
@@ -25,24 +25,23 @@ const tick = () => new Promise((r) => setImmediate(r));
 
 // ── 等价类 ──────────────────────────────────────────────────────────────
 describe('等价类', () => {
-  it('Jarvis 活动：说话 > 思考 > 等待回复 > 空闲', () => {
+  it('Jarvis 活动：思考 > 等待回复 > 空闲', () => {
     const { live } = setup();
-    assert.equal(live.activity(false), 'idle');
+    assert.equal(live.activity(), 'idle');
     live.userSent();
-    assert.equal(live.activity(false), 'awaiting');
+    assert.equal(live.activity(), 'awaiting');
     live.turnStarted(JARVIS);
-    assert.equal(live.activity(false), 'thinking');
-    assert.equal(live.activity(true), 'speaking');
+    assert.equal(live.activity(), 'thinking');
     live.turnEnded(JARVIS, { kind: 'completed' });
-    assert.equal(live.activity(false), 'idle');
+    assert.equal(live.activity(), 'idle');
   });
 
   it('agent 服务的状态优先于事件推断', () => {
     const { live } = setup();
     live.turnStarted(JARVIS);
-    assert.equal(live.activity(false, false), 'idle');
+    assert.equal(live.activity(false), 'idle');
     live.turnEnded(JARVIS, { kind: 'completed' });
-    assert.equal(live.activity(false, true), 'thinking');
+    assert.equal(live.activity(true), 'thinking');
   });
 
   it('会话状态：运行中 / 完成未读 / 失败 / 空闲', () => {
@@ -149,21 +148,9 @@ describe('等价类', () => {
     assert.equal(req.signal, undefined);
   });
 
-  it('说话来源：贾维斯 / 其他会话，结束信号清掉', () => {
-    const { live } = setup();
-    assert.equal(live.speech(), null);
-    live.speechSignal({ phase: 'start', id: 's1', source: 'jarvis' });
-    assert.deepEqual(live.speech(), { source: 'jarvis' });
-    live.speechSignal({ phase: 'end', id: 's1', source: 'jarvis' });
-    assert.equal(live.speech(), null);
-    live.speechSignal({ phase: 'start', id: 's2', source: 'session', sessionId: 'worker' });
-    assert.deepEqual(live.speech(), { source: 'session', sessionId: 'worker' });
-  });
-
   it('说话、回合、待处理的变化都会唤醒等待者', async () => {
     const { live, clock } = setup();
     const changes: Array<() => void> = [
-      () => live.speechSignal({ phase: 'start', id: 's', source: 'jarvis' }),
       () => live.turnStarted('a'),
       () => live.turnEnded('a', { kind: 'completed' }),
       () => live.userSent(),
@@ -204,9 +191,9 @@ describe('边界值', () => {
     const { live, clock } = setup();
     live.userSent();
     clock.advance(AWAITING_TIMEOUT_MS - 1);
-    assert.equal(live.activity(false), 'awaiting');
+    assert.equal(live.activity(), 'awaiting');
     clock.advance(1);
-    assert.equal(live.activity(false), 'idle');
+    assert.equal(live.activity(), 'idle');
   });
 
   it('审批在宽限期内不上面板，刚好满宽限期出现', () => {
@@ -251,23 +238,6 @@ describe('边界值', () => {
     live.turnStarted('a');
     live.turnEnded('a', undefined);
     assert.equal(live.status('a'), 'done');
-  });
-
-  it('开始信号没等到结束：到过期前一刻仍在说，到点后视为结束', () => {
-    const { live, clock } = setup();
-    live.speechSignal({ phase: 'start', id: 's', source: 'session', sessionId: 'w' });
-    clock.advance(SPEECH_STALE_MS - 1);
-    assert.notEqual(live.speech(), null);
-    clock.advance(1);
-    assert.equal(live.speech(), null);
-  });
-
-  it('新一句的开始直接接替上一句，旧句的结束信号不影响新句', () => {
-    const { live } = setup();
-    live.speechSignal({ phase: 'start', id: 'old', source: 'jarvis' });
-    live.speechSignal({ phase: 'start', id: 'new', source: 'session', sessionId: 'w' });
-    live.speechSignal({ phase: 'end', id: 'old', source: 'jarvis' });
-    assert.deepEqual(live.speech(), { source: 'session', sessionId: 'w' });
   });
 
   it('等待：版本已变立即返回；没变化到超时返回原版本', async () => {
@@ -371,23 +341,6 @@ describe('异常路径', () => {
     clock.advance(PENDING_GRACE_MS);
     await assert.rejects(result, /boom/);
     assert.deepEqual(live.pending(), []);
-  });
-
-  it('不合法的说话信号被忽略', () => {
-    const { live } = setup();
-    for (const bad of [null, undefined, 'start', {}, { phase: 'start' }, { phase: 'start', id: '' }, { phase: 'talk', id: 'x' }]) {
-      live.speechSignal(bad);
-    }
-    assert.equal(live.speech(), null);
-    assert.equal(live.version, 0);
-  });
-
-  it('来源未知按贾维斯处理；结束一句从未开始的话不改变状态', () => {
-    const { live } = setup();
-    live.speechSignal({ phase: 'end', id: 'ghost', source: 'jarvis' });
-    assert.equal(live.version, 0);
-    live.speechSignal({ phase: 'start', id: 's', source: 'robot', sessionId: 42 });
-    assert.deepEqual(live.speech(), { source: 'jarvis' });
   });
 
   it('等待超时被限制在上限内', async () => {

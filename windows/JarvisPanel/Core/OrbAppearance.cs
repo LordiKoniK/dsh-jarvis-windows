@@ -1,12 +1,8 @@
 namespace JarvisPanel.Core;
 
-public enum OrbMotion { Idle, Awaiting, Thinking, Speaking, Attention, Error }
+public enum OrbMotion { Idle, Awaiting, Thinking, Attention, Error }
 
-/// <summary>
-/// <c>Violet</c> is not a status: it marks voice-mini narrating another session so
-/// that voice is never mistaken for Jarvis's own.
-/// </summary>
-public enum OrbTint { Cyan, Amber, Red, Violet }
+public enum OrbTint { Cyan, Amber, Red }
 
 public static class OrbTintInfo
 {
@@ -16,7 +12,7 @@ public static class OrbTintInfo
         OrbTint.Cyan => (92 / 255.0, 225 / 255.0, 255 / 255.0),
         OrbTint.Amber => (255 / 255.0, 194 / 255.0, 77 / 255.0),
         OrbTint.Red => (255 / 255.0, 95 / 255.0, 95 / 255.0),
-        _ => (178 / 255.0, 140 / 255.0, 255 / 255.0),
+        _ => (255 / 255.0, 95 / 255.0, 95 / 255.0),
     };
 }
 
@@ -27,9 +23,8 @@ public readonly record struct OrbAppearance(OrbMotion Motion, OrbTint Tint, Badg
 
 /// <summary>
 /// Spec §2.4 / §5.1: colour carries status (host error &gt; pending &gt; failed),
-/// motion carries activity (speaking &gt; thinking &gt; status &gt; awaiting &gt; idle),
-/// and the badge follows the same priority as the colour. With no status to show,
-/// another session's narration turns the orb violet instead of cyan.
+/// motion carries activity (thinking &gt; status &gt; awaiting &gt; idle),
+/// and the badge follows the same priority as the colour.
 /// </summary>
 public static class OrbStateResolver
 {
@@ -45,12 +40,10 @@ public static class OrbStateResolver
         else status = OrbTint.Cyan;
 
         var activity = snapshot?.Activity ?? Activity.Idle;
-        var narrating = activity == Activity.Speaking && snapshot?.Voice.Source == SpeechSource.Session;
-        var tint = status == OrbTint.Cyan && narrating ? OrbTint.Violet : status;
+        var tint = status;
 
         OrbMotion motion;
-        if (activity == Activity.Speaking) motion = OrbMotion.Speaking;
-        else if (activity == Activity.Thinking) motion = OrbMotion.Thinking;
+        if (activity == Activity.Thinking) motion = OrbMotion.Thinking;
         else if (tint == OrbTint.Red) motion = OrbMotion.Error;
         else if (tint == OrbTint.Amber) motion = OrbMotion.Attention;
         else if (activity == Activity.Awaiting || standby) motion = OrbMotion.Awaiting;

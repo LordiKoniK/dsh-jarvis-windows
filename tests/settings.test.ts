@@ -5,14 +5,11 @@ import { mergeSettings, type JarvisSettings } from '../src/settings.ts';
 const defaults = Config({}) as JarvisSettings;
 
 describe('等价类', () => {
-  it('merges editable values, trims strings, copies greetings and preserves the base', () => {
-    const greetings = ['  你好。 ', '欢迎。'];
+  it('merges editable values, trims strings and preserves the base', () => {
     const merged = mergeSettings(defaults, { provider: ' custom ', model: ' test ', reasoningEffort: ' high ',
-      edgeVoice: ' voice ', greetings,
       judgeEnabled: false, judgeProvider: ' other ', judgeModel: ' judge ', judgeTimeoutMs: 30000, maxContinueRounds: 4 });
-    assert.deepEqual(merged, { provider: 'custom', model: 'test', reasoningEffort: 'high', edgeVoice: 'voice', greetings: ['你好。', '欢迎。'],
-      judgeEnabled: false, askInterception: false, autoApprove: 'off', managedNarration: 'self', judgeProvider: 'other', judgeModel: 'judge', judgeTimeoutMs: 30000, maxContinueRounds: 4 });
-    assert.notEqual(merged.greetings, greetings);
+    assert.deepEqual(merged, { provider: 'custom', model: 'test', reasoningEffort: 'high',
+      judgeEnabled: false, askInterception: false, autoApprove: 'off', judgeProvider: 'other', judgeModel: 'judge', judgeTimeoutMs: 30000, maxContinueRounds: 4 });
     assert.equal(defaults.judgeEnabled, true);
   });
   it('partial source falls back to composition, unknown/internal keys are excluded', () => {
@@ -21,10 +18,14 @@ describe('等价类', () => {
     assert.equal(value.provider, 'my-provider'); assert.equal(value.maxContinueRounds, 3);
     assert.ok(!('runtimeFile' in value)); assert.ok(!('unknownField' in value));
   });
-  it('empty judge overrides follow the main model and empty greetings clear additions', () => {
-    const value = mergeSettings({ ...defaults, judgeProvider: 'x', judgeModel: 'y', greetings: ['z'] },
-      { judgeProvider: ' ', judgeModel: '', greetings: [] });
-    assert.equal(value.judgeProvider, ''); assert.equal(value.judgeModel, ''); assert.deepEqual(value.greetings, []);
+  it('empty judge overrides follow the main model', () => {
+    const value = mergeSettings({ ...defaults, judgeProvider: 'x', judgeModel: 'y' },
+      { judgeProvider: ' ', judgeModel: '' });
+    assert.equal(value.judgeProvider, ''); assert.equal(value.judgeModel, '');
+  });
+  it('keys removed with the speech engine are ignored, not fatal', () => {
+    const value = mergeSettings(defaults, { edgeVoice: 'en-GB-RyanNeural', managedNarration: 'relay', greetings: ['hi'] });
+    assert.deepEqual(value, mergeSettings(defaults, {}));
   });
 });
 describe('边界值', () => {
@@ -35,8 +36,8 @@ describe('边界值', () => {
     assert.equal(mergeSettings(defaults, { judgeTimeoutMs: timeout }).judgeTimeoutMs, timeout);
   });
   it('blank required strings fall back to base', () => {
-    const value = mergeSettings(defaults, { provider: '', model: '  ', reasoningEffort: ' ', edgeVoice: '\n' });
-    assert.equal(value.provider, defaults.provider); assert.equal(value.model, defaults.model); assert.equal(value.edgeVoice, defaults.edgeVoice);
+    const value = mergeSettings(defaults, { provider: '', model: '  ', reasoningEffort: ' ' });
+    assert.equal(value.provider, defaults.provider); assert.equal(value.model, defaults.model);
     // Empty effort must survive as empty: DSH resolves its own default, and an
     // explicit value here would silently change the agent.
     assert.equal(value.reasoningEffort, '');
@@ -50,8 +51,8 @@ describe('异常路径', () => {
     assert.equal(mergeSettings(defaults, { judgeTimeoutMs: invalid }).judgeTimeoutMs, 20000);
   });
   it('malformed fields fall back without coercion', () => {
-    const value = mergeSettings(defaults, { judgeEnabled: 'false', greetings: [1, 'hello'], judgeModel: {}, edgeVoice: false });
-    assert.equal(value.judgeEnabled, true); assert.deepEqual(value.greetings, []); assert.equal(value.judgeModel, '');
+    const value = mergeSettings(defaults, { judgeEnabled: 'false', judgeModel: {}, edgeVoice: false });
+    assert.equal(value.judgeEnabled, true); assert.equal(value.judgeModel, '');
   });
   for (const source of [null, undefined, [], 'broken']) it(`ignores malformed source ${source}`, () => {
     assert.deepEqual(mergeSettings(defaults, source), mergeSettings(defaults, {}));

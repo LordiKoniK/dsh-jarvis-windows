@@ -365,7 +365,7 @@ internal sealed class ApprovalCardWindow : Form
     /// <summary>The orb's readout slot, or the audit-card slot when that cannot hold a card.</summary>
     private RectD ReadoutSlot(PointD centre, RectD visible, SizeD size)
     {
-        var hover = Placement.Hover(centre, visible, _model.HoverButtons.Count, size, size);
+        var hover = Placement.Hover(centre, visible, size, size);
         if (hover.Readout.Kind != ReadoutKind.None) return hover.Readout.Rect;
         return Placement.AutoApprovals(centre, visible, hover, Math.Max(1, _cards.Count));
     }

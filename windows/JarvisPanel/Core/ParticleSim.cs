@@ -6,7 +6,7 @@ namespace JarvisPanel.Core;
 /// </summary>
 public readonly record struct PointSprite(float X, float Y, float Size, float Alpha);
 
-public enum MotionRegion { Core, Ring1, Ring2, Speak }
+public enum MotionRegion { Core, Ring1, Ring2 }
 
 /// <summary>Per-state motion parameters, verbatim from <c>states-v5.html</c> (<c>STATES</c>).</summary>
 public sealed class MotionParams
@@ -39,11 +39,6 @@ public sealed class MotionParams
         {
             Region = MotionRegion.Ring1, Retarget = 1.8, Hop = 0.9, Orbit = (0, 0),
             Jitter = 0.004, KMul = 1.7, Base = 0.2, SpeedGlow = 1.1,
-        },
-        OrbMotion.Speaking => new MotionParams
-        {
-            Region = MotionRegion.Speak, Retarget = 0, Hop = 0, Orbit = (0.02, 0.1),
-            Jitter = 0.006, KMul = 1.3, Base = 0.35,
         },
         OrbMotion.Attention => new MotionParams
         {
@@ -89,7 +84,7 @@ public sealed class ParticleSim
         public double Tr, Tth;
         public double Ntr, Nth;
         public double? DepartAt;
-        public double B, Om;
+        public double Om;
         public double K, Zeta;
         public double Ph1, Ph2, F1, F2, Tw, Sz;
         /// <summary>Fixed random coordinates used to lay out the dock strip.</summary>
@@ -99,7 +94,6 @@ public sealed class ParticleSim
     private readonly List<Particle> _parts = new();
     private SeededRandom _rng;
     private int _lastBeatSlot = -1;
-    private double _lastEnv;
 
     public OrbMotion Motion { get; private set; } = OrbMotion.Idle;
     public DockEdge? Dock { get; private set; }
@@ -157,12 +151,9 @@ public sealed class ParticleSim
     private static (double Min, double Max) RangeFor(MotionRegion region) => region switch
     {
         MotionRegion.Core => (CoreMin, CoreMax),
-        MotionRegion.Ring1 or MotionRegion.Speak => (Ring1Min, Ring1Max),
+        MotionRegion.Ring1 => (Ring1Min, Ring1Max),
         _ => (Ring2Min, Ring2Max),
     };
-
-    public static double VoiceEnv(double t)
-        => Math.Min(1, Math.Max(0, 0.5 + 0.34 * Math.Sin(t * 9.1) * Math.Sin(t * 2.3) + 0.22 * Math.Sin(t * 5.7 + 1)));
 
     /// <summary>Double-beat heart pulse, period 1.6s.</summary>
     public static double Pulse(double t)
@@ -232,7 +223,6 @@ public sealed class ParticleSim
             var p = _parts[i];
             p.Ntr = s.R;
             p.Nth = th;
-            p.B = st.Region == MotionRegion.Speak ? (s.R - Ring1Min) / (Ring1Max - Ring1Min) : 0;
             if (st.Orbit.High > 0)
             {
                 var om = _rng.Range(st.Orbit.Low, st.Orbit.High);
@@ -249,7 +239,7 @@ public sealed class ParticleSim
                 p.Tth = th;
                 p.DepartAt = null;
                 p.Om = 0;
-                var r = st.Region == MotionRegion.Speak ? SpeakRadius(0.5, p.B) : s.R;
+                var r = s.R;
                 p.X = Math.Cos(th) * r;
                 p.Y = Math.Sin(th) * r;
                 p.Vx = 0;
@@ -262,9 +252,6 @@ public sealed class ParticleSim
             _parts[i] = p;
         }
     }
-
-    private static double SpeakRadius(double env, double b)
-        => R0 + RingWidth * env + RingWidth * (0.05 + 0.9 * b);
 
     // MARK: Stepping
 
@@ -279,8 +266,6 @@ public sealed class ParticleSim
         var st = MotionParams.Params(Motion);
         var (regionMin, regionMax) = RangeFor(st.Region);
         var still = ReduceMotion;
-        var env = st.Region == MotionRegion.Speak ? (still ? 0.5 : VoiceEnv(t)) : 0;
-        _lastEnv = env;
 
         var kick = 0.0;
         if (st.Beat && !still)
@@ -317,7 +302,6 @@ public sealed class ParticleSim
             }
 
             var tr = p.Tr;
-            if (st.Region == MotionRegion.Speak && p.DepartAt is null) tr = SpeakRadius(env, p.B);
 
             var tx = Math.Cos(p.Tth) * tr + jitter * Math.Sin(t * p.F1 + p.Ph1);
             var ty = Math.Sin(p.Tth) * tr + jitter * Math.Cos(t * p.F2 + p.Ph2);
@@ -353,18 +337,16 @@ public sealed class ParticleSim
 
     /// <summary>
     /// Dock style B (<c>dock.html</c>): a thin particle strip along the edge, an
-    /// L at corners. Speaking breathes the strip thickness.
+    /// L at corners.
     /// </summary>
     private void StepDocked(DockEdge edge, double t, double dt)
     {
-        var env = Motion == OrbMotion.Speaking && !ReduceMotion ? VoiceEnv(t) : 0;
-        _lastEnv = env;
         var jitter = ReduceMotion ? 0 : 0.7 / UnitPoints;
 
         for (var i = 0; i < _parts.Count; i++)
         {
             var p = _parts[i];
-            var target = DockTarget(edge, p.U, p.V, env);
+            var target = DockTarget(edge, p.U, p.V);
             var tx = target.X + jitter * Math.Sin(t * p.F1 + p.Ph1);
             var ty = target.Y + jitter * Math.Cos(t * p.F2 + p.Ph2);
             var k = p.K * 1.2;
@@ -383,10 +365,10 @@ public sealed class ParticleSim
         }
     }
 
-    public static (double X, double Y) DockTarget(DockEdge edge, double u, double v, double env)
+    public static (double X, double Y) DockTarget(DockEdge edge, double u, double v)
     {
         const double h = WindowHalf;
-        var th = (2 + 5 * u) / UnitPoints * (1 + 1.2 * env);
+        var th = (2 + 5 * u) / UnitPoints;
         var along = (v - 0.5) * 96 / UnitPoints;
         var len = 78 / UnitPoints;
         var inset = 3 / UnitPoints;
@@ -416,7 +398,7 @@ public sealed class ParticleSim
         foreach (var p in _parts)
         {
             var sp = Math.Sqrt(p.Vx * p.Vx + p.Vy * p.Vy);
-            var a = st.Base + 0.18 * Math.Sin(t * 2.2 + p.Tw * 3) + st.SpeedGlow * sp + 0.4 * _lastEnv + 0.45 * pulse;
+            var a = st.Base + 0.18 * Math.Sin(t * 2.2 + p.Tw * 3) + st.SpeedGlow * sp + 0.45 * pulse;
             if (st.Flicker) a *= 0.5 + 0.5 * Math.Abs(Math.Sin(t * (8 + p.F1 * 6) + p.Tw));
             if (docked) a *= 0.85;
             a = Math.Min(1, Math.Max(0.08, a));

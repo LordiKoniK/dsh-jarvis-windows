@@ -122,14 +122,6 @@ public sealed class JarvisClient : IJarvisApi, IDisposable
         => RequestAsync(HttpMethod.Post, "/jarvis/managed",
             w => { w.WriteString("session", session); w.WriteBoolean("managed", managed); }, 5, ct);
 
-    public Task SetNarrationAsync(string session, Narration? narration, CancellationToken ct = default)
-        => RequestAsync(HttpMethod.Post, "/jarvis/narration", w =>
-        {
-            w.WriteString("session", session);
-            if (narration is { } n) w.WriteString("narration", n.Raw());
-            else w.WriteNull("narration");
-        }, 5, ct);
-
     public Task SendAsync(string text, string? target, CancellationToken ct = default)
         => RequestAsync(HttpMethod.Post, "/jarvis/input", w =>
         {
@@ -189,9 +181,6 @@ public sealed class JarvisClient : IJarvisApi, IDisposable
             w.WriteString("workspace", identity.Workspace);
         }, 5, ct);
 
-    public Task VoiceAsync(VoiceAction action, CancellationToken ct = default)
-        => RequestAsync(HttpMethod.Post, "/jarvis/voice", w => w.WriteString("action", action.Raw()), 5, ct);
-
     public Task MarkReadAsync(string? session, CancellationToken ct = default)
         => RequestAsync(HttpMethod.Post, "/jarvis/read", w =>
         {
@@ -244,7 +233,14 @@ public sealed class JarvisClient : IJarvisApi, IDisposable
         if (body is not null)
         {
             var buffer = new MemoryStream();
-            using (var w = new Utf8JsonWriter(buffer)) body(w);
+            using (var w = new Utf8JsonWriter(buffer))
+            {
+                // Every caller writes named properties, so the object wrapper belongs
+                // here: Utf8JsonWriter rejects a property at the root token.
+                w.WriteStartObject();
+                body(w);
+                w.WriteEndObject();
+            }
             request.Content = new ByteArrayContent(buffer.ToArray());
             request.Content.Headers.TryAddWithoutValidation("Content-Type", "application/json");
         }

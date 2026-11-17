@@ -22,14 +22,14 @@ describe('等价类', () => {
   });
   it('renders enum choices, defaults and settings availability without applying the plugin', () => {
     const table = renderConfigTable(Config, SettingsSchema);
-    assert.match(table, /locale.*zh.*en/);
-    assert.match(table, /edgeVoice.*YunjianNeural.*是/);
-    assert.match(table, /audioDir.*否/);
+    assert.match(table, /provider.*string.*是/);
+    assert.match(table, /reasoningEffort.*string.*是/);
+    assert.match(table, /model.*string.*是/);
   });
 });
 describe('边界值', () => {
   it('escapes pipes, backticks and HTML in defaults so values cannot break the table', () => {
-    const schema = Object.assign(() => ({ locale: '<b>|`\n' }), { dict: { locale: { type: 'string' } } });
+    const schema = Object.assign(() => ({ provider: '<b>|`\n' }), { dict: { provider: { type: 'string' } } });
     const table = renderConfigTable(schema, { dict: {} });
     assert.ok(table.includes('&lt;b&gt;&#124;&#96;\\n'));
     assert.equal(table.split('\n').length, 3);

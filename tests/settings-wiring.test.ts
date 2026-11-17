@@ -1,21 +1,17 @@
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import childProcess from 'node:child_process';
-import { syncBuiltinESMExports } from 'node:module';
-import { EventEmitter } from 'node:events';
 import { apply } from '../src/index.ts';
-import { OutputCoordinator } from '../src/output.ts';
 let dir: string, dispose: (() => void) | void, values: any, hooks: any, installed: any, options: any;
 let services: any, ctx: any, deferredSettings: any, tools: Map<string, any>, listeners: Map<string, any[]>;
-let calls: any[], announcements: string[];
+let calls: any[], notices: string[];
 const flush = async () => { for (let i = 0; i < 6; i++) await new Promise(r => setImmediate(r)); };
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'jv-settings-')); values = {}; hooks = undefined; installed = undefined;
-  tools = new Map(); listeners = new Map(); calls = []; announcements = [];
-  mock.method(OutputCoordinator.prototype, 'announce', async (_session: string, text: string) => { announcements.push(text); });
+  tools = new Map(); listeners = new Map(); calls = []; notices = [];
   services = { agents: {
     get: (id: string) => id === 'worker' ? { status: 'idle', followup() {}, session: { deriveMessages: () => [
       { role: 'assistant', content: [{ type: 'text', text: '完成工作' }] },
@@ -38,11 +34,8 @@ beforeEach(() => {
 });
 afterEach(async () => { dispose?.(); await flush(); mock.restoreAll(); mock.timers.reset(); syncBuiltinESMExports(); rmSync(dir, { recursive: true, force: true }); });
 function start(extra = {}) {
-  dispose = apply(ctx, { audioDir: dir, memoryRoot: dir, lockFile: join(dir, 'lock.json'), managedFile: join(dir, 'managed.json'),
-    tasksFile: join(dir, 'tasks.json'), runtimeFile: join(dir, 'runtime.json'), provider: 'base', model: 'base-model', managedNarration: 'relay',
-    // Explicit: this suite asserts the edge-tts synth argv, and the platform
-    // default is the local Kokoro backend, whose child takes different flags.
-    ttsBackend: 'edge', ...extra });
+  dispose = apply(ctx, { memoryRoot: dir, lockFile: join(dir, 'lock.json'), managedFile: join(dir, 'managed.json'),
+    tasksFile: join(dir, 'tasks.json'), runtimeFile: join(dir, 'runtime.json'), provider: 'base', model: 'base-model', ...extra });
 }
 async function turn() {
   await tools.get('manage_session').execute({ session: 'worker' });
@@ -54,7 +47,7 @@ const task = () => JSON.parse(readFileSync(join(dir, 'tasks.json'), 'utf8')).at(
 describe('等价类', () => {
   it('installs only supported editable fields in jarvis with restart descriptions', () => {
     start(); assert.equal(installed.ns, 'jarvis'); assert.equal(installed.owner, ctx);
-    assert.deepEqual(Object.keys(installed.schema.dict).sort(), ['provider','model','reasoningEffort','edgeVoice','greetings','askInterception','autoApprove','managedNarration','judgeEnabled','judgeProvider','judgeModel','judgeTimeoutMs','maxContinueRounds'].sort());
+    assert.deepEqual(Object.keys(installed.schema.dict).sort(), ['provider','model','reasoningEffort','askInterception','autoApprove','judgeEnabled','judgeProvider','judgeModel','judgeTimeoutMs','maxContinueRounds'].sort());
     assert.match(installed.schema.dict.provider.meta.description, /DSH restart/);
     assert.match(installed.schema.dict.model.meta.description, /DSH restart/);
     assert.ok(!('runtimeFile' in installed.base));
@@ -63,28 +56,10 @@ describe('等价类', () => {
     values = { provider: 'saved', model: 'saved-model', judgeProvider: 'judge', judgeModel: 'judge-model', maxContinueRounds: 0 };
     start(); assert.deepEqual(options.agentOptions, { provider: 'saved', model: 'saved-model' });
     await turn(); assert.equal(calls[0].provider, 'judge'); assert.equal(calls[0].model, 'judge-model');
-    assert.equal(task().status, 'done'); assert.match(announcements[0], /it has continued 0 times/);
-    values = { judgeEnabled: false, managedNarration: 'self' }; hooks.onChange(); await turn(); assert.equal(calls.length, 1);
+    assert.equal(task().status, 'done'); assert.equal(task().lastVerdict.verdict, 'unsatisfied');
+    assert.deepEqual(notices, []);
+    values = { judgeEnabled: false }; hooks.onChange(); await turn(); assert.equal(calls.length, 1);
     assert.equal(task().status, 'done'); assert.equal(task().lastVerdict, undefined);
-    assert.equal(announcements.length, 1);
-  });
-  it('updates built-in voice on the next utterance and never reuses another voice cache', async () => {
-    const synth: string[][] = [];
-    mock.method(childProcess, 'spawn', (command: string, args: string[]) => {
-      const child = Object.assign(new EventEmitter(), { killed: false, unref() {}, kill() {} });
-      setImmediate(() => {
-        if (command === process.execPath) { synth.push(args); writeFileSync(args[2], 'audio'); }
-        child.emit('close', 0);
-      });
-      return child;
-    });
-    syncBuiltinESMExports(); start();
-    await tools.get('say_to_user').execute({ text: '同一句' }); await flush();
-    values = { edgeVoice: 'en-US-GuyNeural' }; hooks.onChange();
-    await tools.get('say_to_user').execute({ text: '同一句' }); await flush();
-    assert.equal(synth.length, 2); assert.equal(synth[0][3], 'zh-CN-YunjianNeural'); assert.equal(synth[1][3], 'en-US-GuyNeural');
-    assert.notEqual(synth[0][2], synth[1][2]);
-    await tools.get('say_to_user').execute({ text: '同一句' }); await flush(); assert.equal(synth.length, 2);
   });
   it('keeps running agent model stable on watch and resets live values on provider detach', async () => {
     start(); values = { provider: 'future', model: 'future-model', judgeProvider: 'new', judgeModel: 'new-model' }; hooks.onChange();
@@ -94,20 +69,6 @@ describe('等价类', () => {
   });
 });
 describe('边界值', () => {
-  it('会话自己播报且关闭判断时完成和失败都沉默，恢复默认转述立即恢复判断播报', async () => {
-    start();
-    values = { judgeEnabled: false, managedNarration: 'self' }; hooks.onChange();
-    await turn(); assert.equal(task().status, 'done');
-    assert.equal(services.jarvis.claimsTurnEnd('worker'), false);
-    await tools.get('inject_to_session').execute({session:'worker', message:'新任务'});
-    for (const cb of listeners.get('session/event') ?? []) cb({id:'worker'}, {type:'turn/end',data:{reason:{kind:'error'}}});
-    await flush(); assert.equal(task().status, 'open');
-    assert.deepEqual(calls, []); assert.deepEqual(announcements, []);
-    values = { judgeEnabled: true, maxContinueRounds: 0 }; hooks.onChange();
-    assert.equal(services.jarvis.claimsTurnEnd('worker'), true);
-    await turn(); assert.equal(calls.length, 1); assert.equal(announcements.length, 1);
-    assert.equal(task().status, 'done');
-  });
   it('late settings service changes judge but does not recreate or switch running agent', async () => {
     const service = services.settings; delete services.settings; start(); services.settings = service;
     values = { provider: 'later', model: 'later-model', judgeModel: 'later-judge', maxContinueRounds: 0 }; deferredSettings(ctx);

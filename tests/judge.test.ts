@@ -10,8 +10,8 @@ const task = (status: 'open' | 'judging' | 'unsatisfied' | 'done' | 'dropped' = 
 
 describe('等价类', () => {
   for (const [reasonKind, expected] of [
-    ['completed', 'done-silent'], ['aborted', 'drop'], ['error', 'open-silent'],
-    ['blocked', 'open-silent'], ['max-tokens', 'open-silent'], ['interrupted', 'open-silent'],
+    ['completed', 'done'], ['aborted', 'drop'], ['error', 'open'],
+    ['blocked', 'open'], ['max-tokens', 'open'], ['interrupted', 'open'],
     ['unknown', 'ignore'], ['', 'ignore'], [undefined, 'ignore'],
   ] as const) it(`关闭判断时 ${String(reasonKind)} 只规划台账动作`, () => {
     for (const status of ['open', 'judging', 'unsatisfied'] as const) {
@@ -62,17 +62,17 @@ describe('等价类', () => {
     }
   });
 
-  it('judging 状态按评审结果结束、澄清或续轮', () => {
+  it('judging 状态按评审结果结束或续轮', () => {
     const args = { managed: true, task: task('judging'), reasonKind: 'completed', max: 2 };
-    assert.equal(planTurnEnd({ ...args, verdict: satisfied }), 'satisfied');
-    assert.equal(planTurnEnd({ ...args, verdict: { verdict: 'unclear', summary: '需要澄清' } }), 'unclear');
+    assert.equal(planTurnEnd({ ...args, verdict: satisfied }), 'done');
+    assert.equal(planTurnEnd({ ...args, verdict: { verdict: 'unclear', summary: '需要澄清' } }), 'done');
     assert.equal(planTurnEnd({ ...args, verdict: unsatisfied }), 'continue');
   });
 
-  it('中止任务丢弃，其余异常原因归为失败', () => {
+  it('中止任务丢弃，其余异常原因保留 open', () => {
     assert.equal(planTurnEnd({ managed: true, task: task(), reasonKind: 'aborted', max: 2 }), 'drop');
     for (const reasonKind of ['error', 'blocked', 'max-tokens', 'interrupted']) {
-      assert.equal(planTurnEnd({ managed: true, task: task(), reasonKind, max: 2 }), 'fail');
+      assert.equal(planTurnEnd({ managed: true, task: task(), reasonKind, max: 2 }), 'open');
     }
   });
 });
@@ -93,10 +93,10 @@ describe('边界值', () => {
   });
 
   it('最大续轮为 0 时立即达到上限，为 2 时只允许前两轮', () => {
-    for (const [rounds, max, expected] of [[0, 0, 'limit'], [0, 2, 'continue'], [1, 2, 'continue'], [2, 2, 'limit'], [3, 2, 'limit']] as const) {
+    for (const [rounds, max, expected] of [[0, 0, 'done'], [0, 2, 'continue'], [1, 2, 'continue'], [2, 2, 'done'], [3, 2, 'done']] as const) {
       assert.equal(planTurnEnd({ managed: true, task: task('judging', rounds), reasonKind: 'completed', verdict: unsatisfied, max }), expected);
     }
-    assert.equal(planTurnEnd({ managed: true, task: task('judging', 0), rounds: 2, reasonKind: 'completed', verdict: unsatisfied, max: 2 }), 'limit');
+    assert.equal(planTurnEnd({ managed: true, task: task('judging', 0), rounds: 2, reasonKind: 'completed', verdict: unsatisfied, max: 2 }), 'done');
   });
 
   it('空消息、最后用户无回复、未闭合代码围栏得到有限正文', () => {

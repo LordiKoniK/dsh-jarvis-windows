@@ -1,4 +1,4 @@
-﻿using System.Drawing;
+using System.Drawing;
 using System.Windows.Forms;
 using JarvisPanel.App;
 using JarvisPanel.Core;
@@ -78,7 +78,6 @@ internal sealed class SettingsWindow : Form
     private readonly Dictionary<ParticleTier, RadioButton> _tiers = new();
     private readonly CheckBox _followMotion = new();
     private readonly CheckBox _dockStrip = new();
-    private readonly CheckBox _captions = new();
     private readonly TrackBar _dshOpacity = new();
     private readonly TrackBar _otherOpacity = new();
     private readonly Label _dshValue = new();
@@ -151,7 +150,6 @@ internal sealed class SettingsWindow : Form
             foreach (var (tier, radio) in _tiers) radio.Checked = tier == s.Tier;
             _followMotion.Checked = s.FollowReduceMotion;
             _dockStrip.Checked = s.DockToStrip;
-            _captions.Checked = s.ShowCaptions;
 
             _dshOpacity.Value = Percent(s.DshOpacity);
             _otherOpacity.Value = Percent(s.OtherOpacity);
@@ -274,7 +272,6 @@ internal sealed class SettingsWindow : Form
             Toggle(stack, _followMotion, "Follow the Windows reduced-motion setting", s => s.FollowReduceMotion = _followMotion.Checked,
                 "When Windows is set to show fewer animations, the orb holds its particles still.");
             Toggle(stack, _dockStrip, "Collapse into an edge strip when docked", s => s.DockToStrip = _dockStrip.Checked);
-            Toggle(stack, _captions, "Show spoken captions beside the orb", s => s.ShowCaptions = _captions.Checked);
         });
     }
 
@@ -405,9 +402,9 @@ internal sealed class SettingsWindow : Form
             BackColor = Theme.Card,
         };
 
-        var caption = Widgets.Text(label, Widgets.Shared(8.5f), Theme.Dim, Theme.Card, labelWidth, rowHeight);
-        caption.Location = new Point(0, 0);
-        row.Controls.Add(caption);
+        var name = Widgets.Text(label, Widgets.Shared(8.5f), Theme.Dim, Theme.Card, labelWidth, rowHeight);
+        name.Location = new Point(0, 0);
+        row.Controls.Add(name);
 
         field.Location = new Point(labelWidth + ScreenMetrics.Px(8), Math.Max(0, (rowHeight - field.Height) / 2));
         if (field is not Panel) field.Width = FieldWidth(stack);

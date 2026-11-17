@@ -1,8 +1,6 @@
-import { finalReply, judgePrompt, parseRelay, parseVerdict, planTurnEnd, relayPrompt } from './judge.ts';
+import { finalReply, judgePrompt, parseVerdict, planTurnEnd } from './judge.ts';
 import type { TurnEndAction, Verdict } from './judge.ts';
 import { oneShot } from './llm.ts';
-import { FAILED_KINDS } from './live-state.ts';
-import type { Narration } from './narration.ts';
 import type { TaskLedger } from './tasks.ts';
 
 export interface JudgeConfig {
@@ -18,13 +16,10 @@ export interface JudgeConfig {
 interface Dependencies {
   ledger: TaskLedger;
   managed: (session: string) => boolean;
-  /** Read on every decision so a switch applies to the next turn end. */
-  narration?: (session: string) => Narration;
   config: () => JudgeConfig;
   llm: () => unknown;
   messages: (session: string) => unknown;
   title: (session: string) => string | Promise<string>;
-  say: (text: string) => Promise<unknown>;
   notify: (text: string) => void;
   onError: (error: unknown) => void;
 }
@@ -57,14 +52,13 @@ export class CompletionJudge {
     const task = ledger.current(session);
     const config = this.deps.config();
     const max = Number.isFinite(config.maxContinueRounds) ? Math.max(0, Math.floor(config.maxContinueRounds)) : 2;
-    const narration = () => this.deps.narration?.(session);
-    const action = planTurnEnd({ managed: true, task, reasonKind, max, judgeEnabled: config.judgeEnabled,
-      narration: narration() });
+    const action = planTurnEnd({ managed: true, task, reasonKind, max, judgeEnabled: config.judgeEnabled });
     if (action === 'ignore' || !task) return;
-    const settleSilent = (next: TurnEndAction): boolean => {
-      if (next !== 'drop' && next !== 'done-silent' && next !== 'open-silent') return false;
+    const settleSilent = (next: TurnEndAction, verdict?: Verdict): boolean => {
+      if (next !== 'drop' && next !== 'done' && next !== 'open') return false;
       this.invalidate(session);
-      ledger.setStatus(task.id, next === 'drop' ? 'dropped' : next === 'done-silent' ? 'done' : 'open');
+      ledger.setStatus(task.id, next === 'drop' ? 'dropped' : next,
+        verdict ? { ...verdict, at: Date.now() } : undefined);
       return true;
     };
     if (settleSilent(action)) return;
@@ -78,19 +72,15 @@ export class CompletionJudge {
         && this.jobs.get(session) === job && (this.versions.get(session) ?? 0) === version
         && current?.id === task.id && current.status === status;
     };
-    ledger.setStatus(task.id, action === 'fail' ? 'open' : 'judging');
+    ledger.setStatus(task.id, 'judging');
     try {
       let title = session;
       try { title = (await this.deps.title(session)).trim() || session; } catch { /* A title is optional. */ }
-      // Settings can change while title/model services are pending. Replan using
-      // the same policy before any speech or continuation side effect.
+      // Settings can change while the title/model services are pending. Replan using
+      // the same policy before any model call or continuation side effect.
       if (settleSilent(planTurnEnd({ managed: this.deps.managed(session), task: ledger.current(session),
-        reasonKind, max, judgeEnabled: this.deps.config().judgeEnabled, narration: narration(),
-        stale: !active(action === 'fail' ? 'open' : 'judging') }))) return;
-      if (action === 'fail') {
-        if (active('open')) await this.deps.say(`${title} failed: ${reasonKind === 'interrupted' ? 'it was interrupted' : FAILED_KINDS[reasonKind!]}`);
-        return;
-      }
+        reasonKind, max, judgeEnabled: this.deps.config().judgeEnabled,
+        stale: !active('judging') }))) return;
       if (!active('judging')) return;
       let reply = '';
       try { reply = finalReply(this.deps.messages(session)); } catch { /* Missing session messages fall back to unclear. */ }
@@ -103,22 +93,13 @@ export class CompletionJudge {
           timeoutMs: config.judgeTimeoutMs, purpose: 'jarvis-judge', signal: job.signal,
         });
         verdict = parseVerdict(raw) ?? verdict;
-      } else if (reply && narration() === 'relay') {
-        const prompt = relayPrompt(reply);
-        const raw = await oneShot(this.deps.llm(), {
-          ...prompt, provider: config.judgeProvider.trim() || config.provider,
-          model: config.judgeModel.trim() || config.model, maxTokens: 200,
-          timeoutMs: config.judgeTimeoutMs, purpose: 'jarvis-relay', signal: job.signal,
-        });
-        const line = parseRelay(raw);
-        if (line) verdict = { verdict: 'satisfied', summary: line };
       }
+      const enabled = this.deps.config().judgeEnabled;
       const result = planTurnEnd({ managed: this.deps.managed(session), task: ledger.current(session),
-        reasonKind, verdict, max, judgeEnabled: this.deps.config().judgeEnabled, narration: narration(),
-        stale: !active('judging') });
-      if (result === 'ignore' || settleSilent(result)) return;
-      const recorded = { ...verdict, at: Date.now() };
+        reasonKind, verdict, max, judgeEnabled: enabled, stale: !active('judging') });
+      if (result === 'ignore') return;
       if (result === 'continue') {
+        const recorded = { ...verdict, at: Date.now() };
         ledger.setStatus(task.id, 'unsatisfied', recorded);
         this.questions.set(session, { task: task.id, version });
         try {
@@ -134,14 +115,10 @@ export class CompletionJudge {
           ledger.setStatus(task.id, 'open');
           this.deps.onError(error);
         }
-      } else {
-        // Settle before awaiting speech so its completion cannot overwrite newer work.
-        ledger.setStatus(task.id, 'done', recorded);
-        const text = result === 'satisfied' ? `${title}: ${verdict.summary}`
-          : result === 'limit' ? `${title} isn't done yet: ${verdict.missing}; it has continued ${task.rounds} times, so it is over to you`
-          : `${title} is done`;
-        await this.deps.say(text);
+        return;
       }
+      // A judge switched off mid-flight must not stamp its verdict on the task.
+      settleSilent(result, enabled ? verdict : undefined);
     } catch (error) {
       if (active('judging')) ledger.setStatus(task.id, 'open');
       this.deps.onError(error);

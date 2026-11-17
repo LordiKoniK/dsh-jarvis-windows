@@ -59,11 +59,10 @@ build uses.
 | Right-click the orb | Menu: open quick bar, reset position, quit |
 | Hover the orb or strip | Blooms the strip back into a full orb and shows standby |
 | `Ctrl+Alt+J` | Opens / focuses / closes the quick bar (change `hotKey` in `panel.json`) |
-| Tray icon | Every surface: quick bar, history, target, voice, pending cards, auto-approvals, settings, orb visibility, reset, quit |
+| Tray icon | Every surface: quick bar, history, target, pending cards, auto-approvals, settings, orb visibility, reset, quit |
 
 The quick bar is the full spec §6 surface: a target picker (`Ctrl+1`…`Ctrl+9`, `Tab`
-cycles), conversation history, the voice controls that match
-`PanelModel.HoverButtons`, the free-text answer box for a pending question, and one
+cycles), conversation history,
 status line that carries the error, the Esc hint, the toast and the send target.
 `Esc` twice closes it; the first press only shows the hint (`EscapeGate`).
 
@@ -91,7 +90,7 @@ windows/
       UiActions.cs          every surface and the actions the tray and orb menus share
     UI/
       OrbWindow.cs          the orb: render, drag, snap, dock, hover, menu
-      QuickBarWindow.cs     the full quick bar (target picker, history, voice, input)
+      QuickBarWindow.cs     the full quick bar (target picker, history, input)
       ApprovalCardWindow.cs the pending approval / question column
       AutoApprovalsWindow.cs the auto-approval audit list with per-rule revoke
       SettingsWindow.cs     settings dialog over SettingsStore
@@ -200,13 +199,6 @@ Two traps found this way, both worth remembering before touching the surfaces:
 
 Stage B closed the window surfaces and the English string pass. These gaps remain:
 
-* **Hover controls** — the pause / skip / clear / mute / history buttons fanned
-  around the orb (`Placement.Hover`, `PanelModel.HoverButtons`) are laid out in
-  `Core/` but not drawn or hit-tested. They are reachable instead from the quick bar
-  and the tray's Voice submenu, which is why this was left: a fan of hover targets
-  around a window that must never take focus needs its own hit-testing design.
-* **Captions** — the orb draws `PanelModel.CaptionText` as a single pill; the
-  caption surface's motion and placement rules are not implemented.
 * **`VisibilityPolicy`** — the orb is always fully opaque. Proximity fade, hiding in
   fullscreen, and the hidden-apps list need a foreground-window observer
   (`NativeMethods.SetWinEventHook` is already declared for it). The settings window

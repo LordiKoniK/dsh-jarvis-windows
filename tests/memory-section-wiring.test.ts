@@ -23,7 +23,7 @@ function start() {
   const ctx: any = { get: (name: string) => name === 'agents' ? agents : undefined,
     inject: (names: string[], callback: any) => { if (names[0] === 'agents') callback(ctx); },
     on: (name: string, callback: any) => globalHooks.set(name, callback), provide() {} };
-  dispose = apply(ctx, { memoryRoot: root, audioDir: root, lockFile: join(root, 'lock.json'), approvalsDir: join(root, 'memory', 'approvals'),
+  dispose = apply(ctx, { memoryRoot: root, lockFile: join(root, 'lock.json'), approvalsDir: join(root, 'memory', 'approvals'),
     managedFile: join(root, 'managed.json'), tasksFile: join(root, 'tasks.json') });
 }
 async function assemble(variables: Record<string, string> = {}, downstream?: (assembly: PromptAssembly) => void): Promise<PromptAssembly> {

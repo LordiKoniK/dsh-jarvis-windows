@@ -26,7 +26,7 @@ beforeEach(() => {
   const ctx: any = { get: (name: string) => services[name],
     inject: (names: string[], cb: any) => { if (names.every(n => n in services)) cb(ctx); },
     provide() {}, on: (name: string, cb: any) => events.set(name, cb), tools: { register: (t: any) => tools.set(t.name, t) } };
-  dispose = apply(ctx, { jarvisSessionId: 'jarvis-test', memoryRoot: root, audioDir: root,
+  dispose = apply(ctx, { jarvisSessionId: 'jarvis-test', memoryRoot: root,
     lockFile: join(root, 'lock.json'), approvalsDir: join(root, 'memory/approvals'), managedFile: join(root, 'managed.json'),
     tasksFile: join(root, 'tasks.json'), runtimeFile: join(root, 'runtime.json') });
 });

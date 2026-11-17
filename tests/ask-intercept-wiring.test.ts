@@ -10,11 +10,9 @@ import { apply, Config, SettingsSchema } from '../src/index.ts';
 import { LiveState } from '../src/live-state.ts';
 import { MemoryStore } from '../src/memory/store.ts';
 let dir: string, dispose: (() => void) | void, ctx: any, services: any, hooks: any, patch: any;
-let tools: Map<string, any>, listeners: Map<string, any>, calls: any[], forwarded: any[], order: string[], verdict: any, spoken: string[];
+let tools: Map<string, any>, listeners: Map<string, any>, calls: any[], forwarded: any[], order: string[], verdict: any;
 const flush = async () => { for (let i = 0; i < 8; i++) await new Promise(r => setImmediate(r)); };
 beforeEach(() => {
-  spoken = [];
-  mock.method(childProcess, 'spawn', (cmd: string, args: string[]) => { if (cmd === process.execPath) spoken.push(args[1]); const child = Object.assign(new EventEmitter(), { killed: false, unref() {}, kill() {} }); setImmediate(() => child.emit('close', 0)); return child; });
   syncBuiltinESMExports();
   dir = mkdtempSync(join(tmpdir(), 'jv-ask-intercept-')); tools = new Map(); listeners = new Map();
   calls = []; forwarded = []; order = []; patch = {}; verdict = { choice: '两空格', confidence: 0.85 };
@@ -31,11 +29,9 @@ beforeEach(() => {
 });
 afterEach(async () => { dispose?.(); await flush(); mock.restoreAll(); syncBuiltinESMExports(); rmSync(dir, { recursive: true, force: true }); });
 async function start(extra: any = {}) {
-  dispose = apply(ctx, { audioDir: dir, memoryRoot: dir, approvalsDir: join(dir, 'approvals'), lockFile: join(dir, 'lock.json'),
+  dispose = apply(ctx, { memoryRoot: dir, approvalsDir: join(dir, 'approvals'), lockFile: join(dir, 'lock.json'),
     managedFile: join(dir, 'managed.json'), tasksFile: join(dir, 'tasks.json'), runtimeFile: join(dir, 'runtime.json'),
-    // Explicit: this suite asserts the edge-tts synth argv, and the platform
-    // default is the local Kokoro backend, whose child takes different flags.
-    ttsBackend: 'edge', ...extra });
+    ...extra });
   await tools.get('manage_session').execute({ session: 'worker' });
   await tools.get('inject_to_session').execute({ session: 'worker', message: '保留现有项目风格' });
 }
@@ -70,7 +66,7 @@ describe('边界值', () => {
     for (let i = 0; i < 100 && records().length === 0; i++) await new Promise(r => setTimeout(r, 5));
     const rows = records(); assert.equal(rows.length, 1); assert.equal(rows[0].type, 'question/auto-answer');
     assert.equal(rows[0].question, '缩进使用什么？'); assert.equal(rows[0].choice, '两空格'); assert.equal(rows[0].confidence, 0.85);
-    await flush(); assert.match(spoken[0], /worker asked "缩进使用什么？", so I chose 两空格 for you/);
+    await flush(); assert.match(readFileSync(join(dir, 'debug.log'), 'utf8'), /auto-answered a question for worker: 两空格/);
     assert.ok(!('reasoning' in rows[0])); assert.ok(!('memory' in rows[0]));
   });
   it('forwards the original request untouched when uncertain, disabled live or not managed', async () => {

@@ -10,7 +10,7 @@
  */
 import { randomUUID } from 'node:crypto';
 
-export type Activity = 'idle' | 'awaiting' | 'thinking' | 'speaking';
+export type Activity = 'idle' | 'awaiting' | 'thinking';
 export type SessionStatus = 'running' | 'waiting' | 'done' | 'failed' | 'idle';
 export type ApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable';
 
@@ -52,9 +52,6 @@ export interface ApprovalPresetPolicy { canAlwaysAllow: () => boolean; onAlways:
 
 export interface AnswerBody { id?: unknown; decision?: unknown; choice?: unknown; text?: unknown }
 
-/** voice-mini → jarvis.speech(): one spoken line starting or ending. */
-export interface SpeechSignal { phase: 'start' | 'end'; id: string; source: 'jarvis' | 'session'; sessionId?: string; text?: string }
-export interface Speech { source: 'jarvis' | 'session'; sessionId?: string; text?: string }
 export type AnswerResult = 'ok' | 'not-found' | 'invalid';
 
 interface HeldApproval {
@@ -95,9 +92,6 @@ export const FAILED_KINDS: Readonly<Record<string, string>> = {
 export const PENDING_GRACE_MS = 600;
 /** How long "sent, waiting for Jarvis to pick it up" lasts before giving up. */
 export const AWAITING_TIMEOUT_MS = 20_000;
-/** A start whose end never arrived (voice-mini reloaded mid-line) expires after this.
- *  voice-mini caps one clip's playback at 30s. */
-export const SPEECH_STALE_MS = 45_000;
 /** Upper bound for one GET /jarvis/wait. */
 export const MAX_WAIT_MS = 25_000;
 const QUESTION_SEP = '#';
@@ -108,7 +102,6 @@ export class LiveState {
   private readonly unread = new Set<string>();
   private readonly held = new Map<string, Held>();
   private awaitingAt = 0;
-  private speaking: (Speech & { id: string; at: number }) | null = null;
   private seq = 0;
   private readonly waiters = new Set<() => void>();
   private readonly jarvisId: string;
@@ -139,32 +132,6 @@ export class LiveState {
   private bump(): void {
     this.seq += 1;
     for (const w of [...this.waiters]) w();
-  }
-
-  // ── speech (voice-mini → jarvis.speech) ───────────────────────────────
-
-  speechSignal(raw: unknown): void {
-    const s = raw as Partial<SpeechSignal> | null;
-    if (!s || typeof s.id !== 'string' || !s.id) return;
-    if (s.phase === 'start') {
-      const source = s.source === 'session' ? 'session' : 'jarvis';
-      const text = typeof s.text === 'string' ? Array.from(s.text.trim()).slice(0, 120).join('') : '';
-      this.speaking = {
-        id: s.id, source, at: this.now(), ...(text ? { text } : {}),
-        ...(typeof s.sessionId === 'string' && s.sessionId ? { sessionId: s.sessionId } : {}),
-      };
-      this.bump();
-    } else if (s.phase === 'end' && this.speaking?.id === s.id) {
-      this.speaking = null;
-      this.bump();
-    }
-  }
-
-  /** Who is talking right now, if anyone. */
-  speech(): Speech | null {
-    const s = this.speaking;
-    if (!s || this.now() - s.at >= SPEECH_STALE_MS) return null;
-    return { source: s.source, ...(s.text ? { text: s.text } : {}), ...(s.sessionId ? { sessionId: s.sessionId } : {}) };
   }
 
   // ── session events ────────────────────────────────────────────────────
@@ -211,8 +178,7 @@ export class LiveState {
   // ── derived state ─────────────────────────────────────────────────────
 
   /** `jarvisRunning` is the agent service's status when known; events are the fallback. */
-  activity(speaking: boolean, jarvisRunning?: boolean): Activity {
-    if (speaking) return 'speaking';
+  activity(jarvisRunning?: boolean): Activity {
     if (jarvisRunning ?? this.busy.has(this.jarvisId)) return 'thinking';
     if (this.awaitingAt > 0 && this.now() - this.awaitingAt < AWAITING_TIMEOUT_MS) return 'awaiting';
     return 'idle';

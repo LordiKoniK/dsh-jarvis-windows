@@ -6,7 +6,7 @@
   "author": "zane",
   "keywords": [
     "deepseek", "dsh", "harness", "jarvis", "assistant",
-    "agent", "approval", "voice", "tts", "orb",
+    "agent", "approval", "orb",
     "floating-window", "desktop-assistant", "desktop-pet", "desktop-widget",
     "macos", "悬浮窗", "桌面助手", "桌面宠物"
   ],
@@ -31,7 +31,6 @@
     "README.md",
     "README.en.md",
     "LICENSE",
-    "scripts/synth-edge.mjs",
     "scripts/readme-config.mjs",
     "docs/images",
     "docs/design"
@@ -48,9 +47,6 @@
   },
   "dsh": {
     "bundle": { "patch": "./cordis.patch.yml" }
-  },
-  "dependencies": {
-    "node-edge-tts": "^1.2.10"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.1.0",

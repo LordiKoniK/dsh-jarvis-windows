@@ -24,8 +24,8 @@ beforeEach(async () => {
     tools: { register: (tool: any) => tools.set(tool.name, tool) },
     inject: (names: string[], callback: any) => { if (names.every(name => name in services)) callback(ctx); },
   };
-  dispose = apply(ctx, { memoryRoot: root, audioDir: root, lockFile: join(root, 'lock.json'),
-    managedFile: join(root, 'managed.json'), tasksFile: join(root, 'tasks.json'), approvalsDir: join(root, 'memory', 'approvals'), judgeEnabled: false });
+  dispose = apply(ctx, { memoryRoot: root, lockFile: join(root, 'lock.json'),
+    managedFile: join(root, 'managed.json'), tasksFile: join(root, 'tasks.json'), approvalsDir: join(root, 'memory', 'approvals'), runtimeFile: join(root, 'runtime.json'), judgeEnabled: false });
   await Promise.resolve(); store = new MemoryStore({ rootDir: root }); await store.ready();
 });
 afterEach(async () => {

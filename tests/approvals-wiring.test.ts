@@ -31,8 +31,8 @@ afterEach(async () => {
 function start(overrides: Record<string, unknown> = {}) {
   const ctx: any = { get: (name: string) => services[name], provide() {}, inject() {},
     on: (name: string, callback: any) => listeners.set(name, callback) };
-  dispose = apply(ctx, { audioDir: dir, memoryRoot: dir, approvalsDir: approvals, managedFile: join(dir, 'managed.json'),
-    tasksFile: join(dir, 'tasks.json'), lockFile: join(dir, 'lock.json'), ...overrides });
+  dispose = apply(ctx, { memoryRoot: dir, approvalsDir: approvals, managedFile: join(dir, 'managed.json'),
+    tasksFile: join(dir, 'tasks.json'), runtimeFile: join(dir, 'runtime.json'), lockFile: join(dir, 'lock.json'), ...overrides });
 }
 async function files(count = 1): Promise<string[]> {
   for (let i = 0; i < 100; i++) {
@@ -171,8 +171,10 @@ describe('异常路径', () => {
   });
   it('落盘及日志目录损坏不影响已经返回的允许结果', async () => {
     writeFileSync(approvals = join(dir, 'blocked'), 'keep');
-    const audio = join(dir, 'audio-file'); writeFileSync(audio, 'keep');
-    start({ audioDir: audio });
+    // A file where the debug-log directory should be, to prove diagnostics cannot
+    // change an outcome the user already received.
+    const blockedLog = join(dir, 'blocked-log'); writeFileSync(blockedLog, 'keep');
+    start({ runtimeFile: join(blockedLog, 'runtime.json') });
     assert.equal(await outcome('allowed-once'), 'allowed-once');
     await new Promise(resolve => setTimeout(resolve, 20));
     assert.equal(readFileSync(approvals, 'utf8'), 'keep');

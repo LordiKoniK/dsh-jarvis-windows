@@ -1,6 +1,6 @@
-import { appendFileSync, lstatSync, mkdirSync, readdirSync, renameSync, statSync, unlinkSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { cacheVictims, shouldRotate } from './maintenance.ts';
+import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { shouldRotate } from './maintenance.ts';
 
 export class RotatingLog {
   private path: string;
@@ -18,21 +18,4 @@ export class RotatingLog {
       }
     } catch { /* Diagnostics must never interrupt the plugin. */ }
   }
-}
-
-export function cleanupSpeechCache(dir: string, now = Date.now()): void {
-  try {
-    const files = readdirSync(dir).flatMap(name => {
-      // Both synthesized formats: the edge backend caches MP3, Kokoro caches WAV.
-      // Matching only one would let the other's cache grow without bound.
-      if (!/^say-[^/\\]+\.(mp3|wav)$/.test(name)) return [];
-      try {
-        const stat = lstatSync(join(dir, name));
-        return stat.isFile() ? [{ name, mtimeMs: stat.mtimeMs }] : [];
-      } catch { return []; }
-    });
-    for (const name of cacheVictims(files, now, { maxAgeDays: 7, keep: 100 })) {
-      try { unlinkSync(join(dir, name)); } catch { /* Other files can still be cleaned. */ }
-    }
-  } catch { /* Missing or unreadable cache directories are harmless. */ }
 }

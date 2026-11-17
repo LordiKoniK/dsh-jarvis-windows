@@ -1,4 +1,3 @@
-import type { Narration } from './narration.ts';
 import type { Task } from './tasks.ts';
 
 export interface SessionTask {
@@ -12,8 +11,6 @@ export interface SessionRow {
   status: string;
   unread: boolean;
   managed: boolean;
-  /** Effective mode, only on managed rows. */
-  narration?: Narration;
   workspace?: string;
   task?: SessionTask;
 }

@@ -63,9 +63,6 @@ public interface IJarvisApi
     /// <summary>Hands a session to Jarvis (<c>managed == true</c>) or takes it back.</summary>
     Task SetManagedAsync(string session, bool managed, CancellationToken ct = default);
 
-    /// <summary>Overrides a managed session's narration; null restores the host default.</summary>
-    Task SetNarrationAsync(string session, Narration? narration, CancellationToken ct = default);
-
     Task SendAsync(string text, string? target, CancellationToken ct = default);
 
     Task<List<ApprovalRule>> ApprovalRulesAsync(CancellationToken ct = default);
@@ -74,7 +71,6 @@ public interface IJarvisApi
 
     Task AnswerAsync(PendingAnswer answer, CancellationToken ct = default);
 
-    Task VoiceAsync(VoiceAction action, CancellationToken ct = default);
 
     Task MarkReadAsync(string? session, CancellationToken ct = default);
 

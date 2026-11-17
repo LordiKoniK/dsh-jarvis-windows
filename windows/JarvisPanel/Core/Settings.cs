@@ -101,7 +101,6 @@ public sealed class PanelSettings
     /// <summary>"jarvis" or a session id; null = never sent yet.</summary>
     public string? LastTarget { get; set; }
     public bool HistoryExpanded { get; set; }
-    public bool ShowCaptions { get; set; } = true;
     /// <summary>null selects the default Ctrl+Alt+J combination.</summary>
     public string? HotKey { get; set; }
 
@@ -123,7 +122,6 @@ public sealed class PanelSettings
             Positions = new Dictionary<string, SavedPosition>(StringComparer.Ordinal),
             LastTarget = LastTarget,
             HistoryExpanded = HistoryExpanded,
-            ShowCaptions = ShowCaptions,
             HotKey = HotKey,
         };
         foreach (var kv in Positions) c.Positions[kv.Key] = kv.Value.Clone();
@@ -155,7 +153,6 @@ public sealed class PanelSettings
         d.FollowReduceMotion = J.Bool(e, "followReduceMotion", d.FollowReduceMotion);
         d.DockToStrip = J.Bool(e, "dockToStrip", d.DockToStrip);
         d.HistoryExpanded = J.Bool(e, "historyExpanded", d.HistoryExpanded);
-        d.ShowCaptions = J.Bool(e, "showCaptions", d.ShowCaptions);
         d.LastTarget = J.Str(e, "lastTarget");
         d.HotKey = J.Str(e, "hotKey");
 
@@ -215,7 +212,6 @@ public sealed class PanelSettings
             }
             w.WriteEndObject();
             w.WriteBoolean("proximityFade", ProximityFade);
-            w.WriteBoolean("showCaptions", ShowCaptions);
             w.WriteString("tier", Tier.Raw());
             w.WriteEndObject();
         }

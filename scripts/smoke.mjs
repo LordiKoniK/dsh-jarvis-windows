@@ -17,8 +17,8 @@ export function checkStatus(response, expected) {
 export function checkState(response) {
   if (!checkStatus(response, 200).passed) return fail('state HTTP 状态不符合预期');
   const body = response.body;
-  if (!object(body) || !Array.isArray(body.sessions) || !object(body.voice) || !Array.isArray(body.pending)) {
-    return fail('state 缺少 sessions 数组、voice 对象或 pending 数组');
+  if (!object(body) || !Array.isArray(body.sessions) || !Array.isArray(body.pending)) {
+    return fail('state 缺少 sessions 数组或 pending 数组');
   }
   if (!body.sessions.every((row) => object(row) && typeof row.id === 'string' && row.id.trim() &&
     typeof row.title === 'string' && typeof row.status === 'string' && row.status.trim() && typeof row.managed === 'boolean')) {

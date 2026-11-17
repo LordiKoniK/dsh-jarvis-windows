@@ -60,9 +60,6 @@ internal sealed class UiActions : IDisposable, ISettingsHost
 
     public List<TargetOption> Targets => _model.Targets;
 
-    /// <summary>Playback controls for the tray, mirroring the bar and the hover fan.</summary>
-    public List<HoverButton> VoiceButtons => _model.HoverButtons;
-
     public void Attach(OrbWindow orb)
     {
         _orb = orb;
@@ -171,11 +168,6 @@ internal sealed class UiActions : IDisposable, ISettingsHost
             _model.SelectTarget(target);
             _quickBar?.SyncToModel(_model.QuickBarOpen);
         });
-    }
-
-    public void PressVoice(HoverButton button)
-    {
-        Guard(() => _ = RunAsync(() => _model.PressAsync(button)));
     }
 
     // ------------------------------------------------------------- stage B panes

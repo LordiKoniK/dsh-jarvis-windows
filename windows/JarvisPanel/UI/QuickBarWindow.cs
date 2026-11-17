@@ -8,7 +8,7 @@ namespace JarvisPanel.UI;
 
 /// <summary>
 /// The full quick reply bar (spec Â§6): target picker, conversation history,
-/// voice controls, pending answers and the input line, anchored beside the orb.
+/// pending answers and the input line, anchored beside the orb.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -27,7 +27,7 @@ namespace JarvisPanel.UI;
 /// <para>
 /// The bar grows toward the side with room (<see cref="QuickBarLayout.GrowsUp"/>):
 /// the input row always sits beside the orb, and the target picker, history and
-/// voice rows stack away from it. Card 0 is therefore either the topmost or the
+/// pending rows stack away from it. Card 0 is therefore either the topmost or the
 /// bottommost element depending on that flag, which <see cref="PlaceRow"/> hides
 /// from the rest of the file.
 /// </para>
@@ -60,7 +60,6 @@ internal sealed class QuickBarWindow : Form
     private readonly PillButton _target;
     private readonly PillButton _send;
     private readonly PillButton _historyToggle;
-    private readonly FlowLayoutPanel _voice;
     private readonly Panel _history;
     private readonly Label _status;
     private readonly Panel _targetRow;
@@ -109,14 +108,6 @@ internal sealed class QuickBarWindow : Form
         _historyToggle.Width = ScreenMetrics.Px(26);
         _historyToggle.Click += (_, _) => _ = RunAsync(() => _model.SetHistoryExpandedAsync(!_model.HistoryExpanded));
 
-        _voice = new FlowLayoutPanel
-        {
-            FlowDirection = FlowDirection.LeftToRight,
-            WrapContents = false,
-            BackColor = Theme.SurfaceOpaque,
-            Margin = Padding.Empty,
-            Padding = Padding.Empty,
-        };
 
         _history = new Panel
         {
@@ -143,7 +134,6 @@ internal sealed class QuickBarWindow : Form
         Controls.Add(_input);
         Controls.Add(_target);
         Controls.Add(_historyToggle);
-        Controls.Add(_voice);
         Controls.Add(_history);
         Controls.Add(_targetRow);
         Controls.Add(_send);
@@ -193,7 +183,6 @@ internal sealed class QuickBarWindow : Form
 
         SyncTargetChip();
         SyncSendLabel();
-        SyncVoiceRow();
         SyncHistoryToggle();
         SyncHistory();
 
@@ -236,46 +225,6 @@ internal sealed class QuickBarWindow : Form
         _send.Enabled = _model.Draft.Trim().Length > 0;
     }
 
-    /// <summary>
-    /// Playback controls mirror <see cref="PanelModel.HoverButtons"/>, so the bar
-    /// and the orb's hover fan can never disagree about what is available.
-    /// </summary>
-    private void SyncVoiceRow()
-    {
-        var wanted = new List<HoverButton>(_model.HoverButtons);
-        var same = _voice.Controls.Count == wanted.Count;
-        if (same)
-        {
-            for (var i = 0; i < wanted.Count; i++)
-            {
-                if (_voice.Controls[i] is PillButton pill && pill.Tag is HoverButton button && button == wanted[i])
-                    continue;
-                same = false;
-                break;
-            }
-        }
-        if (same) return;
-
-        _voice.SuspendLayout();
-        foreach (Control control in _voice.Controls) control.Dispose();
-        _voice.Controls.Clear();
-
-        foreach (var button in wanted)
-        {
-            var pill = Widgets.Pill(button.Label(), Theme.Dim, Theme.PillFill, Theme.PillStroke, 24, 8f);
-            pill.Tag = button;
-            var captured = button;
-            pill.Click += (_, _) => _ = RunAsync(() => _model.PressAsync(captured));
-            _voice.Controls.Add(pill);
-        }
-        _voice.ResumeLayout(true);
-    }
-
-    /// <summary>
-    /// The history toggle is a glyph button rather than a pill: the row it lives in
-    /// has to fit the target chip, the caret, the playback pills and Send, and a
-    /// word-wide "History" pill left the caret about forty pixels of typing room.
-    /// </summary>
     private void SyncHistoryToggle()
     {
         var expanded = _model.HistoryExpanded;
@@ -443,8 +392,7 @@ internal sealed class QuickBarWindow : Form
     }
 
     /// <summary>
-    /// Positions the chip row left to right: target chip, playback pills, caret,
-    /// history toggle, Send. The caret is what yields when the row is tight — the
+    /// Positions the chip row left to right: target chip, caret, history toggle,\r?\n    /// Send. The caret is what yields when the row is tight — the
     /// other four are fixed-width and a narrow caret is still usable, while a
     /// clobbered button is not.
     /// </summary>
@@ -464,15 +412,6 @@ internal sealed class QuickBarWindow : Form
         _target.Location = new Point(x, Centre(_target));
         x += _target.Width + gap;
 
-        var voiceWidth = 0;
-        foreach (Control pill in _voice.Controls)
-        {
-            pill.Location = new Point(voiceWidth, Math.Max(0, (band - pill.Height) / 2));
-            voiceWidth += pill.Width + ScreenMetrics.Px(4);
-        }
-        _voice.Location = new Point(x, top);
-        _voice.Size = new Size(voiceWidth, band);
-        x += voiceWidth + gap;
 
         var sendWidth = Math.Max(ScreenMetrics.Px(54), _send.Width);
         _send.Location = new Point(pad + width - sendWidth, Centre(_send));
@@ -547,6 +486,9 @@ internal sealed class QuickBarWindow : Form
     private async Task SendAsync()
     {
         await _model.SubmitAsync();
+        // A failed send is the one thing the user cannot see after the bar closes,
+        // so it earns a log line as well as the red status strip.
+        if (_model.SendError is { Length: > 0 } error) Log.Write("send failed: " + error);
         SyncToModel(_model.QuickBarOpen);
     }
 

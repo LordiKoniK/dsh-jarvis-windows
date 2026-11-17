@@ -19,7 +19,7 @@ beforeEach(async () => {
     inject: (names: string[], callback: any) => { if (names.every(name => name in services)) callback(ctx); },
     tools: { register: (tool: any) => tools.set(tool.name, tool) },
   };
-  dispose = apply(ctx, { audioDir: root, memoryRoot: root, lockFile: join(root, 'lock.json'),
+  dispose = apply(ctx, { memoryRoot: root, lockFile: join(root, 'lock.json'),
     approvalsDir: join(root, 'memory', 'approvals'), managedFile: join(root, 'managed.json'), tasksFile: join(root, 'tasks.json') });
   await Promise.resolve();
   store = new MemoryStore({ rootDir: root });
@@ -33,7 +33,7 @@ describe('等价类', () => {
     const result = await remember.execute({ content: '用中文回复。详情不回传。', tag: '偏好', session: 'worker' });
     assert.deepEqual(result, { text: 'Remembered' });
     assert.deepEqual(remember.output.render({}, result), [{ type: 'text', text: 'Remembered' }]);
-    assert.deepEqual(remember.output.schema, tools.get('say_to_user').output.schema);
+    assert.deepEqual(remember.output.schema, tools.get('recall').output.schema);
     assert.deepEqual(recall.output.schema, remember.output.schema);
     const found = await recall.execute({ query: '中文', session: 'worker' });
     assert.match(found.text, /\[偏好\] 用中文回复。/); assert.doesNotMatch(found.text, /详情不回传/);

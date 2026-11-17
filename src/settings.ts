@@ -1,16 +1,11 @@
-import { isNarration, type Narration } from './narration.ts';
-
 /** Editable DSH settings. Storage paths and agent identity stay composition-owned. */
 export interface JarvisSettings {
   provider: string;
   model: string;
   reasoningEffort: string;
-  edgeVoice: string;
-  greetings: string[];
   judgeEnabled: boolean;
   askInterception: boolean;
   autoApprove: 'off' | 'safe' | 'safe+grey';
-  managedNarration: Narration;
   judgeProvider: string;
   judgeModel: string;
   judgeTimeoutMs: number;
@@ -19,10 +14,12 @@ export interface JarvisSettings {
 
 export const SETTINGS_LIMITS = { minTimeout: 1000, maxTimeout: 120000, maxRounds: 10 } as const;
 
-/** Resolve a full snapshot against the immutable composition base, never the previous update. */
+/** Resolve a full snapshot against the immutable composition base, never the previous update.
+ *  Keys this release dropped (voice, narration, greetings) are simply ignored when an
+ *  existing settings file still carries them. */
 export function mergeSettings(base: JarvisSettings, source: unknown): JarvisSettings {
   const raw = source && typeof source === 'object' && !Array.isArray(source) ? source as Record<string, unknown> : {};
-  const text = (key: 'provider' | 'model' | 'reasoningEffort' | 'edgeVoice' | 'judgeProvider' | 'judgeModel', blank = false): string => {
+  const text = (key: 'provider' | 'model' | 'reasoningEffort' | 'judgeProvider' | 'judgeModel', blank = false): string => {
     const value = raw[key];
     return typeof value === 'string' && (blank || value.trim()) ? value.trim() : base[key];
   };
@@ -30,15 +27,11 @@ export function mergeSettings(base: JarvisSettings, source: unknown): JarvisSett
     const value = raw[key];
     return typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max ? value : base[key];
   };
-  const greetings = Array.isArray(raw.greetings) && raw.greetings.every(value => typeof value === 'string')
-    ? raw.greetings as string[] : base.greetings;
   return {
-    provider: text('provider'), model: text('model'), reasoningEffort: text('reasoningEffort'), edgeVoice: text('edgeVoice'),
-    greetings: greetings.map(value => value.trim()).filter(Boolean),
+    provider: text('provider'), model: text('model'), reasoningEffort: text('reasoningEffort'),
     judgeEnabled: typeof raw.judgeEnabled === 'boolean' ? raw.judgeEnabled : base.judgeEnabled,
     askInterception: typeof raw.askInterception === 'boolean' ? raw.askInterception : base.askInterception,
     autoApprove: ['off', 'safe', 'safe+grey'].includes(raw.autoApprove as string) ? raw.autoApprove as JarvisSettings['autoApprove'] : base.autoApprove,
-    managedNarration: isNarration(raw.managedNarration) ? raw.managedNarration : base.managedNarration,
     judgeProvider: text('judgeProvider', true), judgeModel: text('judgeModel', true),
     judgeTimeoutMs: integer('judgeTimeoutMs', SETTINGS_LIMITS.minTimeout, SETTINGS_LIMITS.maxTimeout),
     maxContinueRounds: integer('maxContinueRounds', 0, SETTINGS_LIMITS.maxRounds),

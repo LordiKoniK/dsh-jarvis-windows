@@ -10,7 +10,6 @@ let dir: string;
 let ledger: TaskLedger;
 let judge: CompletionJudge;
 let managed: Set<string>;
-let spoken: string[];
 let notices: string[];
 let errors: unknown[];
 let messages: unknown;
@@ -18,7 +17,6 @@ let llm: any;
 let calls: any[];
 let config: JudgeConfig;
 let getTitle: () => string | Promise<string>;
-let say: (text: string) => Promise<unknown>;
 let notify: (text: string) => void;
 const stream = (verdict = 'satisfied', summary = '已完成', missing = '补测试') => ({
   async *stream(options: unknown) {
@@ -35,19 +33,18 @@ function deferred<T>() {
 const saved = (): any[] => JSON.parse(readFileSync(join(dir, 'tasks.json'), 'utf8'));
 const createJudge = () => new CompletionJudge({
   ledger, managed: (id: string) => managed.has(id), config: () => config, llm: () => llm,
-  messages: () => messages, title: () => getTitle(), say: (text: string) => say(text),
+  messages: () => messages, title: () => getTitle(),
   notify: (text: string) => notify(text), onError: (error: unknown) => errors.push(error),
 });
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'jv-completion-'));
   ledger = new TaskLedger(join(dir, 'tasks.json'));
-  managed = new Set(['a', 'b']); spoken = []; notices = []; errors = []; calls = [];
+  managed = new Set(['a', 'b']); notices = []; errors = []; calls = [];
   messages = [{ role: 'user', content: [{ type: 'text', text: '需求' }] }, { role: 'assistant', content: [{ type: 'text', text: '结果' }] }];
   llm = stream();
   config = { provider: 'base-provider', model: 'base-model', judgeEnabled: true, judgeProvider: '', judgeModel: '', judgeTimeoutMs: 100, maxContinueRounds: 2 };
   getTitle = () => 'hammer';
-  say = async text => { spoken.push(text); };
   notify = text => { notices.push(text); };
   judge = createJudge();
 });
@@ -65,13 +62,12 @@ describe('等价类', () => {
       assert.equal(titleCalls, 0);
       assert.equal(saved()[0].status, status);
       assert.equal(saved()[0].lastVerdict, undefined);
-      assert.deepEqual(spoken, []); assert.deepEqual(notices, []); assert.deepEqual(calls, []); assert.deepEqual(errors, []);
+      assert.deepEqual(notices, []); assert.deepEqual(calls, []); assert.deepEqual(errors, []);
     });
   }
-  it('满足后保存裁决并直接播报，不唤醒贾维斯', async () => {
+  it('满足后保存裁决并静默结束，不唤醒贾维斯', async () => {
     ledger.open('a', '需求');
     await judge.turnEnded('a', 'completed');
-    assert.deepEqual(spoken, ['hammer: 已完成']);
     assert.equal(notices.length, 0);
     assert.equal(saved()[0].status, 'done');
     assert.equal(saved()[0].lastVerdict.verdict, 'satisfied');
@@ -85,7 +81,6 @@ describe('等价类', () => {
     const task = ledger.open('a', '改写指令');
     await judge.turnEnded('a', 'completed');
     assert.equal(ledger.current('a')?.status, 'unsatisfied');
-    assert.equal(spoken.length, 0);
     assert.match(notices[0], /judgement unsatisfied/);
     assert.ok(notices[0].includes(task.id));
     assert.ok(notices[0].includes('用户原话'));
@@ -108,13 +103,13 @@ describe('等价类', () => {
     assert.equal(calls.length, 1);
   });
 
-  for (const [kind, reason] of [['error', 'the model call failed'], ['blocked', 'it was blocked'], ['max-tokens', 'the output was too long and was cut off'], ['interrupted', 'it was interrupted']]) {
-    it(`${kind} 只播失败原因，任务保持 open`, async () => {
+  for (const kind of ['error', 'blocked', 'max-tokens', 'interrupted']) {
+    it(`${kind} 不调用模型，任务保持 open`, async () => {
       ledger.open('a', '需求');
       await judge.turnEnded('a', kind);
-      assert.deepEqual(spoken, [`hammer failed: ${reason}`]);
       assert.equal(ledger.current('a')?.status, 'open');
       assert.equal(calls.length, 0);
+      assert.deepEqual(notices, []);
     });
   }
 });
@@ -128,27 +123,27 @@ describe('边界值', () => {
     await new Promise(resolve => setImmediate(resolve));
     config.judgeEnabled = false; response.resolve(); await pending;
     assert.equal(saved()[0].status, 'done'); assert.equal(saved()[0].lastVerdict, undefined);
-    assert.deepEqual(spoken, []); assert.deepEqual(notices, []);
+    assert.deepEqual(notices, []);
   });
-  for (const reason of ['completed', 'error']) it(`等标题期间关判断，${reason} 也不播报或调用模型`, async () => {
+  for (const reason of ['completed', 'error']) it(`等标题期间关判断，${reason} 也不调用模型`, async () => {
     const title = deferred<string>(); getTitle = () => title.promise;
     ledger.open('a', '需求'); const pending = judge.turnEnded('a', reason);
     config.judgeEnabled = false; title.resolve('hammer'); await pending;
     assert.equal(saved()[0].status, reason === 'completed' ? 'done' : 'open');
-    assert.deepEqual(spoken, []); assert.deepEqual(calls, []); assert.deepEqual(notices, []);
+    assert.deepEqual(calls, []); assert.deepEqual(notices, []);
   });
-  it('达到续轮上限后播报缺项并结束，max=0 也不提问', async () => {
+  it('达到续轮上限后结算缺项，max=0 也不提问', async () => {
     llm = stream('unsatisfied');
     const task = ledger.open('a', '需求');
     ledger.bumpRound(task.id); ledger.bumpRound(task.id);
     await judge.turnEnded('a', 'completed');
-    assert.deepEqual(spoken, [`hammer isn't done yet: 补测试; it has continued 2 times, so it is over to you`]);
     assert.equal(notices.length, 0);
     assert.equal(saved()[0].status, 'done');
+    assert.equal(saved()[0].lastVerdict.missing, '补测试');
     config.maxContinueRounds = 0;
     ledger.open('b', '需求');
     await judge.turnEnded('b', 'completed');
-    assert.match(spoken[1], /it has continued 0 times/);
+    assert.equal(notices.length, 0);
   });
 
   it('判断开启但空回复或缺少模型仍走完成模板', async () => {
@@ -160,7 +155,6 @@ describe('边界值', () => {
       await judge.turnEnded('a', 'completed');
       assert.equal(saved().at(-1).lastVerdict.verdict, 'unclear');
     }
-    assert.deepEqual(spoken, Array(2).fill('hammer is done'));
     assert.equal(calls.length, 0);
   });
 
@@ -173,16 +167,14 @@ describe('边界值', () => {
     await pending;
     assert.equal(calls[0].provider, 'judge-provider');
     assert.equal(calls[0].model, 'judge-model');
-    assert.equal(spoken.length, 1);
   });
 
-  it('相同 completed 重复事件只调用一次模型和播报', async () => {
+  it('相同 completed 重复事件只调用一次模型', async () => {
     ledger.open('a', '需求');
     const pending = judge.turnEnded('a', 'completed');
     await judge.turnEnded('a', 'completed');
     await pending;
     assert.equal(calls.length, 1);
-    assert.equal(spoken.length, 1);
   });
 
   it('插件重启后仍可回答持久化的未满足任务，拒绝可附带说明', async () => {
@@ -198,7 +190,7 @@ describe('边界值', () => {
 
 describe('异常路径', () => {
   for (const reason of ['completed','aborted','error','blocked','max-tokens','interrupted']) {
-    it(`判断关闭时 ${reason} 台账落盘失败仍完成内存更新且不播报`, async () => {
+    it(`判断关闭时 ${reason} 台账落盘失败仍完成内存更新`, async () => {
       judge.dispose();
       const blocked = join(dir, 'blocked'); writeFileSync(blocked, 'keep');
       ledger = new TaskLedger(join(blocked, 'tasks.json'), error => errors.push(error));
@@ -208,11 +200,11 @@ describe('异常路径', () => {
       assert.ok(errors.length > 0);
       assert.equal(ledger.current('a')?.status, ['completed','aborted'].includes(reason) ? undefined : 'open');
       assert.equal(readFileSync(blocked, 'utf8'), 'keep');
-      assert.deepEqual(spoken, []); assert.deepEqual(notices, []); assert.deepEqual(calls, []);
+      assert.deepEqual(notices, []); assert.deepEqual(calls, []);
     });
   }
 
-  it('未托管、无任务、未知原因都不判断或播报，aborted 静默丢弃', async () => {
+  it('未托管、无任务、未知原因都不判断，aborted 静默丢弃', async () => {
     ledger.open('outside', '需求');
     await judge.turnEnded('outside', 'completed');
     await judge.turnEnded('a', 'completed');
@@ -220,7 +212,7 @@ describe('异常路径', () => {
     await judge.turnEnded('a', 'unknown');
     await judge.turnEnded('a', 'aborted');
     assert.equal(ledger.current('a'), undefined);
-    assert.equal(spoken.length + notices.length + calls.length, 0);
+    assert.equal(notices.length + calls.length, 0);
   });
 
   for (const change of ['start', 'replace', 'release', 'dispose']) {
@@ -240,7 +232,7 @@ describe('异常路径', () => {
       if (change === 'release') { managed.delete('a'); ledger.dropSession('a'); judge.invalidate('a'); }
       if (change === 'dispose') judge.dispose();
       gate.resolve(); await pending;
-      assert.equal(spoken.length + notices.length, 0);
+      assert.equal(notices.length, 0);
       assert.notEqual(saved().find(t => t.id === old.id).status, 'done');
       if (change === 'start') assert.equal(ledger.current('a')?.status, 'open');
     });
@@ -266,23 +258,24 @@ describe('异常路径', () => {
     getTitle = () => { throw new Error('title unavailable'); };
     ledger.open('a', '需求');
     await judge.turnEnded('a', 'completed');
-    assert.deepEqual(spoken, ['a is done']);
+    assert.equal(saved()[0].status, 'done');
+    assert.equal(saved()[0].lastVerdict.verdict, 'unclear');
     config.judgeTimeoutMs = 5;
     llm = { async *stream() { await new Promise(() => {}); } };
     ledger.open('b', '需求');
     await judge.turnEnded('b', 'completed');
-    assert.equal(spoken[1], 'b is done');
+    assert.equal(saved().at(-1).lastVerdict.verdict, 'unclear');
   });
 
-  it('通知失败恢复 open，播报失败不影响之后新任务', async () => {
+  it('通知失败恢复 open，之后的新任务照常判断', async () => {
     llm = stream('unsatisfied');
     notify = () => { throw new Error('Jarvis unavailable'); };
     ledger.open('a', '需求');
     await judge.turnEnded('a', 'completed');
     assert.equal(ledger.current('a')?.status, 'open');
-    llm = stream(); say = async () => { throw new Error('speech failed'); };
+    notify = text => { notices.push(text); };
+    ledger.open('a', '需求');
     await judge.turnEnded('a', 'completed');
-    assert.equal(saved()[0].status, 'done');
-    assert.equal(errors.length, 2);
+    assert.equal(saved().at(-1).status, 'unsatisfied');
   });
 });

@@ -23,7 +23,7 @@ function start(services: Record<string, any>, config: Record<string, unknown>): 
     logger: { warn: () => {} },
   };
   dispose = apply(context, {
-    audioDir: dir, memoryRoot: dir, lockFile: join(dir, 'lock.json'),
+    memoryRoot: dir, lockFile: join(dir, 'lock.json'),
     managedFile: join(dir, 'managed.json'), tasksFile: join(dir, 'tasks.json'),
     runtimeFile: join(dir, 'runtime.json'),
     ...config,

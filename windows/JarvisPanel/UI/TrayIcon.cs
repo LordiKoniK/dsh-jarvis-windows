@@ -79,11 +79,6 @@ internal sealed class TrayIcon : IDisposable
             menu.Items.Add(pick);
         }
 
-        var voice = new ToolStripMenuItem("Voice");
-        foreach (var button in _actions.VoiceButtons)
-            voice.DropDownItems.Add(new ToolStripMenuItem(button.Label(), null, (_, _) => _actions.PressVoice(button)));
-        menu.Items.Add(voice);
-
         menu.Items.Add(new ToolStripMenuItem("Pending requests…", null, (_, _) => _actions.ShowApprovalCards()));
         menu.Items.Add(new ToolStripMenuItem("Auto-approved actions…", null, (_, _) => _actions.ShowAutoApprovals()));
         menu.Items.Add(new ToolStripMenuItem("Settings…", null, (_, _) => _actions.ShowSettings()));

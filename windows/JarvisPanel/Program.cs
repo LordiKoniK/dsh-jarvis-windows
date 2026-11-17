@@ -113,8 +113,11 @@ internal sealed class PanelContext : ApplicationContext
             Log.Write("fatal exception: " + Log.Describe(e.ExceptionObject as Exception ?? new Exception("unknown")));
 
         _orb = new OrbWindow(_model, _store);
+        // Attach() owns the orb's event subscriptions, including QuickBarRequested.
+        // Do not subscribe it again here: ToggleQuickBar is a true toggle, so a
+        // second handler made every click open and immediately close the bar —
+        // which reads as "clicking the orb does nothing" (and earlier, as a flash).
         _actions.Attach(_orb);
-        _orb.QuickBarRequested += _actions.ToggleQuickBar;
         _orb.SetMenuActions(_actions.ResetPosition, _actions.Quit);
         _orb.HotKeyPressed += _actions.HotKeyPressed;
 

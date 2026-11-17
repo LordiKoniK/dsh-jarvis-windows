@@ -8,6 +8,19 @@ import { ApprovalPresets } from '../src/approval-presets.ts';
 import { canPresetApproval } from '../src/approval-risk.ts';
 
 let root: string, workspace: string, presets: ApprovalPresets, now: number;
+const WINDOWS = process.platform === 'win32';
+/** Windows lets any user create a junction but reserves directory symlinks for
+ * privileged processes; a junction is the same reparse-point escape for the
+ * classifier, so use whichever mechanism the platform allows. */
+async function linkDirectory(target: string, path: string): Promise<boolean> {
+  try {
+    await symlink(target, path, WINDOWS ? 'junction' : 'dir');
+    return true;
+  } catch (error) {
+    if (WINDOWS && (error as NodeJS.ErrnoException).code === 'EPERM') return false;
+    throw error;
+  }
+}
 const operation = (command = 'npm test', tool = 'bash') => ({ tool, command, workspace });
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'jv-presets-')); workspace = join(root, 'project');
@@ -81,12 +94,12 @@ describe('异常路径', () => {
     await assert.rejects(presets.add(operation(command)));
     assert.deepEqual(await presets.list(), []);
   });
-  it('follows symlinks and missing leaf ancestors for outside writes', async () => {
-    await symlink(root, join(workspace, 'outside'));
+  it('follows symlinks and missing leaf ancestors for outside writes', async t => {
+    if (!await linkDirectory(root, join(workspace, 'outside'))) return t.skip('directory links unavailable');
     assert.equal(canPresetApproval(operation('outside/new/file', 'write_file')), false);
     assert.equal(canPresetApproval(operation('../escape', 'edit_file')), false);
     assert.equal(canPresetApproval(operation('curl https://example.test -ooutside')), false);
-    await symlink(join(root, 'not-created'), join(workspace, 'dangling'));
+    if (!await linkDirectory(join(root, 'not-created'), join(workspace, 'dangling'))) return t.skip('directory links unavailable');
     assert.equal(canPresetApproval(operation('dangling', 'write_file')), false);
     assert.equal(canPresetApproval(operation('touch dangling/new')), false);
   });
@@ -94,18 +107,18 @@ describe('异常路径', () => {
     assert.equal(canPresetApproval(operation('curl https://example.test -Kconfig')), false);
     assert.equal(canPresetApproval({ ...operation('touch file'), args: JSON.stringify({ command: 'touch file', cwd: root }) }), false);
   });
-  it('does not collapse .. before resolving a symlink target', async () => {
+  it('does not collapse .. before resolving a symlink target', async t => {
     await mkdir(join(root, 'outside/dir'), { recursive: true });
-    await symlink(join(root, 'outside/dir'), join(workspace, 'link'));
+    if (!await linkDirectory(join(root, 'outside/dir'), join(workspace, 'link'))) return t.skip('directory links unavailable');
     assert.equal(canPresetApproval(operation('link/../target', 'write_file')), false);
     assert.equal(canPresetApproval(operation('touch link/../target')), false);
     assert.equal(canPresetApproval(operation(join(workspace, 'link/../target'), 'write_file')), true);
     assert.equal(canPresetApproval(operation(workspace + '/link/../target', 'write_file')), false);
   });
-  it('protects .ssh/.dsh lexical names even when symlink targets remain inside cwd', async () => {
+  it('protects .ssh/.dsh lexical names even when symlink targets remain inside cwd', async t => {
     await mkdir(join(workspace, 'config'));
     for (const name of ['.ssh', '.dsh']) {
-      await symlink(join(workspace, 'config'), join(workspace, name));
+      if (!await linkDirectory(join(workspace, 'config'), join(workspace, name))) return t.skip('directory links unavailable');
       assert.equal(canPresetApproval(operation(name + '/config', 'write_file')), false);
       assert.equal(canPresetApproval(operation('touch ' + name + '/config')), false);
     }
@@ -119,10 +132,11 @@ describe('异常路径', () => {
     await assert.rejects(presets.add(operation()));
     assert.equal(await readFile(file, 'utf8'), '{broken');
   });
-  it('write failure and symlinked preferences never report success', async () => {
+  it('write failure and symlinked preferences never report success', async t => {
     await mkdir(join(root, 'memory')); await writeFile(join(root, 'memory/preferences'), 'blocked');
     await assert.rejects(presets.add(operation()));
-    await rm(join(root, 'memory/preferences')); await symlink(workspace, join(root, 'memory/preferences'));
+    await rm(join(root, 'memory/preferences'));
+    if (!await linkDirectory(workspace, join(root, 'memory/preferences'))) return t.skip('directory links unavailable');
     await assert.rejects(presets.add(operation()));
   });
 });

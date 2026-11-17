@@ -7,15 +7,15 @@ using JarvisPanel.Core;
 namespace JarvisPanel.UI;
 
 /// <summary>
-/// The full quick reply bar (spec Â§6): target picker, conversation history,
+/// The full quick reply bar (spec §6): target picker, conversation history,
 /// pending answers and the input line, anchored beside the orb.
 /// </summary>
 /// <remarks>
 /// <para>
 /// This is the one orb surface that <b>does</b> take focus: it has to, or typing
 /// would land in whatever is behind it. The orb hands focus over deliberately when
-/// the bar opens and never takes it back. Focus is only requested on the hidden â†’
-/// visible transition â€” the model raises a change roughly once a second, and
+/// the bar opens and never takes it back. Focus is only requested on the hidden →
+/// visible transition — the model raises a change roughly once a second, and
 /// activating on every one of those would yank the user out of whatever they are
 /// typing in, which is the "grabbed my mouse" failure in a different costume.
 /// </para>
@@ -195,7 +195,7 @@ internal sealed class QuickBarWindow : Form
         var wasHidden = !Visible;
         if (wasHidden) Show();
         // Only the first show takes focus. Later model changes must leave the
-        // caret â€” and whatever the user is typing into â€” exactly where it was.
+        // caret — and whatever the user is typing into — exactly where it was.
         if (wasHidden) FocusInput();
     }
 
@@ -203,8 +203,8 @@ internal sealed class QuickBarWindow : Form
     {
         var count = _model.Targets.Count;
         var label = _model.AnsweringItem is not null ? "Answering" : _model.LabelFor(_model.Target);
-        var trimmed = label.Length > 12 ? label[..11] + "â€¦" : label;
-        var text = count > 1 ? trimmed + " â–¾" : trimmed;
+        var trimmed = label.Length > 12 ? label[..11] + "…" : label;
+        var text = count > 1 ? trimmed + " ▾" : trimmed;
         if (_target.Text != text)
         {
             _target.Text = text;
@@ -303,7 +303,7 @@ internal sealed class QuickBarWindow : Form
         var stack = new Stack(card, pad, ScreenMetrics.Px(6), inner);
 
         var who = mine ? "You" : _model.LabelFor(_model.Target);
-        if (!string.IsNullOrEmpty(message.RoutedTo)) who += " â†’ " + message.RoutedTo;
+        if (!string.IsNullOrEmpty(message.RoutedTo)) who += " → " + message.RoutedTo;
         stack.Add(Widgets.Text(who, Widgets.Shared(7.5f, FontStyle.Bold), Color.FromArgb(230, accent),
             card.Fill, inner, ScreenMetrics.Px(13)));
         stack.Add(Widgets.Wrapped(message.Preview, Widgets.Shared(8.5f), Theme.Text, card.Fill, inner,
@@ -347,7 +347,7 @@ internal sealed class QuickBarWindow : Form
 
     /// <summary>
     /// Lays every row out. The input row is pinned beside the orb and the other
-    /// rows stack away from it â€” the bar reads as a column growing out of the orb,
+    /// rows stack away from it — the bar reads as a column growing out of the orb,
     /// so which end of the window the input sits at depends on
     /// <see cref="QuickBarLayout.GrowsUp"/>.
     /// </summary>
@@ -437,7 +437,7 @@ internal sealed class QuickBarWindow : Form
     /// MonitorMetrics dividing raw device pixels by the monitor scale), so the orb
     /// centre goes in unconverted and the result comes out as pixels by multiplying
     /// alone. Adding the monitor origin here as well would move the bar by the whole
-    /// monitor offset â€” invisible on a primary monitor at 0,0, badly wrong on any
+    /// monitor offset — invisible on a primary monitor at 0,0, badly wrong on any
     /// display to the left of or above it.
     /// </remarks>
     private double Place(double heightPoints)
@@ -493,8 +493,8 @@ internal sealed class QuickBarWindow : Form
     }
 
     /// <summary>
-    /// The target picker (spec Â§6.1): every target the host reports, the pending
-    /// item's session first, with Ctrl+1â€¦Ctrl+9 as the keyboard route.
+    /// The target picker (spec §6.1): every target the host reports, the pending
+    /// item's session first, with Ctrl+1…Ctrl+9 as the keyboard route.
     /// </summary>
     private void ShowTargetMenu()
     {
@@ -507,7 +507,7 @@ internal sealed class QuickBarWindow : Form
             var option = options[i];
             var shortcut = i < 9 ? $"Ctrl+{i + 1}" : "";
             var label = option.Label;
-            if (option.Status is { } status) label += "  Â·  " + EnumText.Label(status);
+            if (option.Status is { } status) label += "  ·  " + EnumText.Label(status);
             var item = new ToolStripMenuItem(label, null, (_, _) => Run(() => SelectTarget(option.Target)))
             {
                 Tag = option.Target,
@@ -536,7 +536,7 @@ internal sealed class QuickBarWindow : Form
     }
 
     /// <summary>
-    /// The approval answer is explicit here â€” the bar is what a pending card opens
+    /// The approval answer is explicit here — the bar is what a pending card opens
     /// when the user chooses to type, so Ctrl+Enter is the "yes, and send it" chord.
     /// </summary>
     private async Task AnswerApprovalAsync(bool allow)
@@ -577,21 +577,21 @@ internal sealed class QuickBarWindow : Form
         else if (_model.AnsweringItem is { } pending)
         {
             // The card cannot show a text box without taking the keyboard, so the
-            // bar is where a free-text answer is typed (spec Â§6.2).
+            // bar is where a free-text answer is typed (spec §6.2).
             _status.ForeColor = Theme.Amber;
-            text = $"Type an answer to {pending.Title.Trim()} Â· Ctrl+Enter allows without a note";
-            if (text.Length > 96) text = text[..95] + "â€¦";
+            text = $"Type an answer to {pending.Title.Trim()} · Ctrl+Enter allows without a note";
+            if (text.Length > 96) text = text[..95] + "…";
         }
         else if (_model.Connection.IsOnline)
         {
             _status.ForeColor = Theme.Dim;
             text = "To " + _model.LabelFor(_model.Target) +
-                   (_model.Targets.Count > 1 ? " Â· Ctrl+1â€¦9 switches target" : "");
+                   (_model.Targets.Count > 1 ? " · Ctrl+1…9 switches target" : "");
         }
         else
         {
             _status.ForeColor = Theme.Dim;
-            text = "Not connected â€” sends will fail until DSH is back";
+            text = "Not connected — sends will fail until DSH is back";
         }
 
         if (text == _lastStatus) return;
@@ -601,7 +601,7 @@ internal sealed class QuickBarWindow : Form
 
     // -------------------------------------------------------------- keyboard/UI
 
-    /// <summary>Enter sends, Esc runs the model's two-press gate, Ctrl+1â€¦9 pick a target.</summary>
+    /// <summary>Enter sends, Esc runs the model's two-press gate, Ctrl+1…9 pick a target.</summary>
     private async void OnInputKeyDown(object? sender, KeyEventArgs e)
     {
         if (e.KeyCode == Keys.Escape)

@@ -1,6 +1,6 @@
 import { lstatSync, realpathSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { WINDOWS, commandName, expandHome, hasTraversal, hasWindowsPathHazard, isInsideRelative, sameRoot } from './approval-path.ts';
 
 export interface PresetOperation { tool: string; command: string; workspace: string; args?: string }
 
@@ -58,14 +58,20 @@ function canonical(path: string): string {
     }
   }
 }
+const PROTECTED_PATH = /(?:^|[/\\])\.(?:ssh|dsh)(?:[/\\]|$)/i;
 function inside(path: string, workspace: string): boolean {
-  if (!path || path.includes('\0') || path.split('/').includes('..') || path.startsWith('~') && !path.startsWith('~/')) return false;
-  const lexical = path.startsWith('~/') ? join(homedir(), path.slice(2)) : resolve(workspace, path);
-  if (/(?:^|[/\\])\.(?:ssh|dsh)(?:[/\\]|$)/i.test(lexical)) return false;
-  const absolute = canonical(lexical);
-  const rel = relative(canonical(workspace), absolute);
-  const protectedPath = /(?:^|[/\\])\.(?:ssh|dsh)(?:[/\\]|$)/i.test(absolute);
-  return !protectedPath && !isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`);
+  if (!path || path.includes('\0') || hasTraversal(path) || hasWindowsPathHazard(path)) return false;
+  // `~` is the shell home shorthand; `~user` is not portable and PowerShell does
+  // not expand it. Only the exact `~/` (and Windows `~\`) forms are understood.
+  if (path.startsWith('~') && !path.startsWith('~/') && !(WINDOWS && path.startsWith('~\\'))) return false;
+  const expanded = expandHome(path);
+  if (expanded === undefined) return false;
+  const lexical = isAbsolute(expanded) ? expanded : resolve(workspace, expanded);
+  if (PROTECTED_PATH.test(lexical) || !sameRoot(lexical, workspace)) return false;
+  try {
+    const absolute = canonical(lexical);
+    return !PROTECTED_PATH.test(absolute) && isInsideRelative(absolute, canonical(workspace));
+  } catch { return false; }
 }
 
 export function canPresetApproval(operation: PresetOperation): boolean {
@@ -96,8 +102,11 @@ export function canPresetApproval(operation: PresetOperation): boolean {
     if (/[\n\r\0;&|<>$`\\'"(){}*?\[\]!#]/.test(command)) return false;
     const words = command.trim().split(/\s+/);
     const executable = words.shift()!;
-    const base = basename(executable);
-    if (!COMMANDS.has(base) || executable !== base && !['/bin', '/usr/bin'].includes(dirname(executable))) return false;
+    // Only a bare command name, or an absolute path in the platform's trusted
+    // system directories, may borrow a reviewed command's preset policy. On
+    // Windows that is System32/SysWOW64/PowerShell rather than POSIX /bin.
+    const base = commandName(executable);
+    if (!base || !COMMANDS.has(base)) return false;
     // Avoid alternate cwd, git aliases/config, external diffs and shell-executing find flags.
     if (base === 'git' && (!['status', 'diff', 'log', 'show', 'branch', 'commit', 'push'].includes(words[0]) ||
       words.some(w => /^--(?:exec|ext-diff|textconv|output|git-dir|work-tree)(?:=|$)/.test(w)))) return false;

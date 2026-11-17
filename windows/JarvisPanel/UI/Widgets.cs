@@ -72,7 +72,11 @@ internal class HudPanel : Panel
 /// </remarks>
 internal sealed class PillButton : Button
 {
-    private bool _hover;
+    /// <summary>WCAG AA for body text; the floor a caption may never drop below.</summary>
+    private const double MinInkContrast = 4.5;
+
+    /// <summary>How far the face and stroke move toward white while hovered.</summary>
+    private const double HoverLift = 0.105;
 
     public PillButton()
     {
@@ -103,20 +107,28 @@ internal sealed class PillButton : Button
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public float Radius { get; set; } = -1f;
 
-    protected override void OnPaintBackground(PaintEventArgs e)
-    {
-        e.Graphics.Clear(Parent?.BackColor ?? Theme.SurfaceOpaque);
-    }
-
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
+
+        // Lay an opaque base down on every paint. A Button is ControlStyles.Opaque,
+        // so WinForms never calls OnPaintBackground here and each WM_PAINT starts
+        // from the pixels the previous one left. PillFill is 8% white, so without
+        // this base every repaint composited that 8% white again: a hover
+        // lightened the capsule and no later paint, including the one MouseLeave
+        // triggers, could bring it back, until the face was white and the
+        // near-white caption vanished into it. Painting the base first makes the
+        // paint idempotent: one paint and a hundred produce identical pixels.
+        var behind = Parent?.BackColor ?? Theme.SurfaceOpaque;
+        using (var back = new SolidBrush(behind)) g.FillRectangle(back, ClientRectangle);
+
         var rect = new RectangleF(0.5f, 0.5f, Math.Max(1, Width - 1f), Math.Max(1, Height - 1f));
         var radius = Radius < 0 ? Math.Min(rect.Width, rect.Height) / 2 : Radius;
-        var strength = Enabled ? (_hover ? 1.35 : 1.0) : 0.5;
-        Theme.FillRounded(g, rect, radius, Shade(Fill, strength));
-        if (Stroke.A > 0) Theme.StrokeRounded(g, rect, radius, Shade(Stroke, strength));
+        var state = StateNow();
+        var fill = FillFor(state);
+        Theme.FillRounded(g, rect, radius, fill);
+        if (Stroke.A > 0) Theme.StrokeRounded(g, rect, radius, StrokeFor(state));
 
         var flags = TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding
                     | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis;
@@ -128,34 +140,146 @@ internal sealed class PillButton : Button
         };
         var pad = ScreenMetrics.Px(TextAlign == ContentAlignment.MiddleCenter ? 2 : 8);
         var box = new Rectangle(pad, 0, Math.Max(1, Width - pad * 2), Height);
-        TextRenderer.DrawText(g, Text, Font, box, Enabled ? Ink : Shade(Ink, 0.5), flags);
+        TextRenderer.DrawText(g, Text, Font, box, InkFor(fill, behind, state), flags);
     }
 
+    /// <summary>
+    /// What the pill should look like right now, read from the live input state
+    /// instead of remembered from MouseEnter/MouseLeave. A leave that never
+    /// arrives (capture held by another window, the card moved out from under the
+    /// cursor, a rebuild that swapped the control) would otherwise latch the
+    /// highlight on forever, and no repaint could disprove it because the flag was
+    /// the only evidence. Asking the cursor makes every paint authoritative on
+    /// its own.
+    /// </summary>
+    private PillState StateNow()
+    {
+        if (!Enabled) return PillState.Disabled;
+        if (!IsHandleCreated) return PillState.Rest;
+        return RectangleToScreen(ClientRectangle).Contains(Control.MousePosition)
+            ? PillState.Hover
+            : PillState.Rest;
+    }
+
+    // These handlers only ask for a repaint; StateNow decides what it shows. That
+    // keeps the event path as a hint and the cursor as the authority, so a missed
+    // or duplicated event can never leave a stale highlight on screen.
     protected override void OnMouseEnter(EventArgs e)
     {
-        _hover = true;
         Invalidate();
         base.OnMouseEnter(e);
     }
 
     protected override void OnMouseLeave(EventArgs e)
     {
-        _hover = false;
         Invalidate();
         base.OnMouseLeave(e);
     }
 
-    /// <summary>Alpha for the disabled state, a brighter face for hover.</summary>
-    private static Color Shade(Color c, double factor)
+    private Color FillFor(PillState state) => state switch
     {
-        if (Math.Abs(factor - 1) < 0.001) return c;
-        if (factor > 1)
-        {
-            int Lift(int v) => (int)Math.Min(255, Math.Round(v + (255 - v) * (factor - 1) * 0.3));
-            return Color.FromArgb(c.A, Lift(c.R), Lift(c.G), Lift(c.B));
-        }
-        return Color.FromArgb((int)Math.Round(c.A * factor), c.R, c.G, c.B);
+        PillState.Hover => Lift(Fill),
+        PillState.Disabled => Fade(Fill, 0.45),
+        _ => Fill,
+    };
+
+    private Color StrokeFor(PillState state) => state switch
+    {
+        PillState.Hover => Lift(Stroke),
+        PillState.Disabled => Fade(Stroke, 0.45),
+        _ => Stroke,
+    };
+
+    /// <summary>
+    /// A translucent face cannot be made lighter by moving its channels (white is
+    /// already 255), so the lift goes into the alpha, which is what actually reads
+    /// as a lighter capsule over a dark card. An opaque face (the amber primary
+    /// pill) lifts its channels instead. Keeping the lift on the fill rather than
+    /// on the ink is deliberate: near-white ink is the card's language, and a face
+    /// that stays dark keeps that ink at roughly 9:1 instead of the 1:1 a white
+    /// wash produces.
+    /// </summary>
+    private static Color Lift(Color c)
+    {
+        if (c.A is > 0 and < 255)
+            return Color.FromArgb(Channel(c.A + (255 - c.A) * HoverLift), c.R, c.G, c.B);
+        return Color.FromArgb(c.A,
+            Channel(c.R + (255 - c.R) * HoverLift),
+            Channel(c.G + (255 - c.G) * HoverLift),
+            Channel(c.B + (255 - c.B) * HoverLift));
     }
+
+    /// <summary>Dimming for the disabled state: only the alpha moves, so the hue survives.</summary>
+    private static Color Fade(Color c, double factor) => Color.FromArgb(Channel(c.A * factor), c.R, c.G, c.B);
+
+    private static int Channel(double v) => (int)Math.Min(255, Math.Max(0, Math.Round(v)));
+
+    /// <summary>
+    /// The caption colour for a face, checked against the pixels it will land on.
+    /// The failure this exists to prevent is ink and fill drifting together: a
+    /// near-white caption on a capsule that has been lifted toward white is
+    /// unreadable no matter how carefully the palette was picked. Rest and hover
+    /// keep the designed ink; the guard only fires when a state would otherwise be
+    /// illegible, so the caption cannot become invisible in any state.
+    /// </summary>
+    private Color InkFor(Color fill, Color behind, PillState state)
+    {
+        var face = Over(fill, behind);
+        // TextRenderer hands GDI a COLORREF, which has no alpha, so an ink colour is
+        // drawn at full strength whatever its A is. The disabled dimming therefore
+        // has to be blended into the RGB here - leaving it in the alpha (as the old
+        // Shade(Ink, 0.5) did) silently did nothing.
+        var ink = Opaque(Ink);
+        if (state == PillState.Disabled) ink = Blend(ink, face, 0.5);
+        if (Contrast(ink, face) >= MinInkContrast) return ink;
+
+        var light = Color.White;
+        var dark = Color.FromArgb(255, 8, 11, 18);
+        return Contrast(light, face) >= Contrast(dark, face) ? light : dark;
+    }
+
+    /// <summary>Drops the alpha, because GDI will drop it anyway.</summary>
+    private static Color Opaque(Color c) => Color.FromArgb(255, c.R, c.G, c.B);
+
+    /// <summary>Moves a colour a fraction of the way toward another one.</summary>
+    private static Color Blend(Color c, Color toward, double amount)
+    {
+        int Mix(int a, int b) => (int)Math.Round(a + (b - a) * amount);
+        return Color.FromArgb(255, Mix(c.R, toward.R), Mix(c.G, toward.G), Mix(c.B, toward.B));
+    }
+
+    /// <summary>Composites a possibly translucent colour over an opaque one.</summary>
+    private static Color Over(Color top, Color bottom)
+    {
+        if (top.A >= 255) return Color.FromArgb(255, top.R, top.G, top.B);
+        var a = top.A / 255.0;
+        int Mix(int t, int b) => (int)Math.Round(t * a + b * (1 - a));
+        return Color.FromArgb(255, Mix(top.R, bottom.R), Mix(top.G, bottom.G), Mix(top.B, bottom.B));
+    }
+
+    /// <summary>WCAG contrast ratio between two opaque colours.</summary>
+    private static double Contrast(Color a, Color b)
+    {
+        var la = Luminance(a);
+        var lb = Luminance(b);
+        if (la < lb) (la, lb) = (lb, la);
+        return (la + 0.05) / (lb + 0.05);
+    }
+
+    private static double Luminance(Color c)
+    {
+        static double Linear(int v)
+        {
+            var s = v / 255.0;
+            return s <= 0.03928 ? s / 12.92 : Math.Pow((s + 0.055) / 1.055, 2.4);
+        }
+        return 0.2126 * Linear(c.R) + 0.7152 * Linear(c.G) + 0.0722 * Linear(c.B);
+    }
+
+    /// <summary>The states a pill actually paints. There is no separate pressed
+    /// look: a press used to be invisible and stays that way, because adding one
+    /// would change how every card and the quick bar behave.</summary>
+    private enum PillState { Rest, Hover, Disabled }
 }
 
 /// <summary>

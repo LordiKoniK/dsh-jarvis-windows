@@ -12,7 +12,7 @@ namespace JarvisPanel.UI;
 /// <remarks>
 /// This is a normal activating window: the user opens it from the tray on purpose,
 /// so it takes focus and can be read at leisure. Revoking a rule only stops future
-/// approvals â€” the operations that already ran are the host's history, not ours.
+/// approvals — the operations that already ran are the host's history, not ours.
 /// </remarks>
 internal sealed class AutoApprovalsWindow : Form
 {
@@ -39,7 +39,7 @@ internal sealed class AutoApprovalsWindow : Form
         _orb = orb;
 
         SuspendLayout();
-        Text = "Jarvis â€” auto-approved actions";
+        Text = "Jarvis — auto-approved actions";
         FormBorderStyle = FormBorderStyle.FixedToolWindow;
         ShowInTaskbar = true;
         StartPosition = FormStartPosition.Manual;
@@ -162,7 +162,7 @@ internal sealed class AutoApprovalsWindow : Form
             return;
         }
 
-        _header.Text = $"Auto-approved actions Â· last {entries.Count}";
+        _header.Text = $"Auto-approved actions · last {entries.Count}";
         foreach (var entry in entries)
         {
             var row = BuildRow(entry, width);
@@ -206,7 +206,7 @@ internal sealed class AutoApprovalsWindow : Form
         var command = string.IsNullOrWhiteSpace(entry.Command) ? entry.Tool : entry.Command;
         var commandLabel = Widgets.Text(command, Widgets.Shared(7.5f, mono: true), Theme.Dim, Theme.Card, inner,
             ScreenMetrics.Px(14));
-        _tips.SetToolTip(commandLabel, $"{entry.Tool} Â· {command}");
+        _tips.SetToolTip(commandLabel, $"{entry.Tool} · {command}");
         stack.Add(commandLabel, ScreenMetrics.Px(2));
 
         if (entry.Rule is { } rule)
@@ -218,14 +218,14 @@ internal sealed class AutoApprovalsWindow : Form
             stack.Add(revoke, ScreenMetrics.Px(5), stretch: false);
 
             var workspace = Widgets.Text(_model.RevokingAutoApproval == rule
-                    ? "Revokingâ€¦"
-                    : $"{rule.Workspace} Â· {rule.Tool}",
+                    ? "Revoking…"
+                    : $"{rule.Workspace} · {rule.Tool}",
                 Widgets.Shared(7.5f), Theme.Faint, Theme.Card, inner, ScreenMetrics.Px(14));
             stack.Add(workspace, ScreenMetrics.Px(3));
         }
         else
         {
-            stack.Add(Widgets.Text("No revocable preset â€” this entry is a record only.", Widgets.Shared(7.5f),
+            stack.Add(Widgets.Text("No revocable preset — this entry is a record only.", Widgets.Shared(7.5f),
                 Theme.Faint, Theme.Card, inner, ScreenMetrics.Px(14)), ScreenMetrics.Px(5));
         }
 

@@ -10,7 +10,7 @@ internal readonly record struct OrbPlacement(double X, double Y, DockEdge? Edge,
 
 /// <summary>
 /// What the settings window needs from the app: it owns the settings file, but the
-/// orb, the hotkey and the tray icon live elsewhere. Narrow on purpose â€” the window
+/// orb, the hotkey and the tray icon live elsewhere. Narrow on purpose — the window
 /// must not be able to reach the whole panel.
 /// </summary>
 internal interface ISettingsHost
@@ -30,7 +30,7 @@ internal interface ISettingsHost
 }
 
 /// <summary>
-/// The settings window (macOS <c>SettingsView</c>, spec Â§7): every <see cref="PanelSettings"/>
+/// The settings window (macOS <c>SettingsView</c>, spec §7): every <see cref="PanelSettings"/>
 /// field that means something on Windows, edited through <see cref="SettingsStore"/>
 /// so a change lands in <c>panel.json</c> immediately.
 /// </summary>
@@ -55,7 +55,7 @@ internal sealed class SettingsWindow : Form
     private const double LabelWidth = 168;
 
     private const string HotKeyHint =
-        "Use modifiers plus a letter, digit or function key â€” for example Ctrl+Alt+J.";
+        "Use modifiers plus a letter, digit or function key — for example Ctrl+Alt+J.";
 
     private static readonly (string Label, DockEdge? Edge)[] Edges =
     {
@@ -552,7 +552,7 @@ internal sealed class SettingsWindow : Form
     {
         var placement = _host.OrbPlacement;
         _where.Text = $"Now at {placement.X:0}, {placement.Y:0} on {placement.DeviceName}" +
-                      (placement.Edge is { } edge ? $" Â· docked {edge.Raw()}" : "");
+                      (placement.Edge is { } edge ? $" · docked {edge.Raw()}" : "");
     }
 
     private static void Configure(NumericUpDown box)

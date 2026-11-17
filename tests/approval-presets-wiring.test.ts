@@ -19,7 +19,10 @@ beforeEach(() => {
   syncBuiltinESMExports();
   const hold = LiveState.prototype.holdApproval;
   mock.method(LiveState.prototype, 'holdApproval', function(this: LiveState, ...args: any[]) { held = this; return (hold as any).apply(this, args); });
-  const services: any = { sessions: { get: () => ({ header: { cwd: workspace } }) },
+  // The fake store must only know the worker sessions: reporting a stored Jarvis
+  // session would send apply() down the resume path that this mock does not
+  // implement, so no persona section or management tool would ever register.
+  const services: any = { sessions: { get: (id: string) => id === 'jarvis-test' ? undefined : { header: { cwd: workspace } } },
     systemPrompt: { section: (section: any) => sections.set(section.name, section) },
     webServer: { port: 43210, register: (route: any) => { handler = route.handler; } },
     agents: { get: () => undefined, create: (_opts: any) => { _opts.setup(ctx); return new Promise(() => {}); } } };
@@ -65,11 +68,13 @@ describe('等价类', () => {
     assert.match(sections.get('jarvis:persona').text(), /list_approval_rules/);
     assert.equal((await request('/approval-rules/remove', rule)).status, 204);
     assert.deepEqual((await request('/approval-rules')).body.rules, []);
-    assert.match((await remove.execute(rule)).text, /未找到/);
+    // The management tools report English text ("not found"/"removed"); the
+    // assertion is about the outcome, not the language.
+    assert.match((await remove.execute(rule)).text, /not found/);
   });
   it('tool deletes the exact tuple and ordinary approvals do not create presets', async () => {
     const { done, card } = approve(); held.answer({ id: card.id, decision: 'always' }); await done;
-    const [rule] = await saved(); assert.match((await tools.get('remove_approval_rule').execute(rule)).text, /已删除/);
+    const [rule] = await saved(); assert.match((await tools.get('remove_approval_rule').execute(rule)).text, /removed/);
     const second = approve(); held.answer({ id: second.card.id, decision: 'allow' }); await second.done;
     await new Promise(r => setTimeout(r, 20)); assert.deepEqual(JSON.parse(readFileSync(file(), 'utf8')), []);
   });

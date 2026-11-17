@@ -92,7 +92,9 @@ describe('等价类', () => {
     assert.match(html, /managed="true"/);
     assert.ok(html.includes(`command="${command}"`));
     assert.match(html, /cwd="\/full\/path\/to\/project"/);
-    assert.match(html, /allow="false" source="user" reason="">拒绝/);
+    // The record renders the decision as English "denied"; assert the decision
+    // encoded by the card, not a localized label.
+    assert.match(html, /allow="false" source="user" reason="">denied/);
   });
   it('面板拒绝经过真实 holdApproval 并记录一次', async () => {
     let now = Date.now();

@@ -2,7 +2,12 @@ using System.Text.Json;
 
 namespace JarvisPanel.Core;
 
-public enum Activity { Idle, Awaiting, Thinking }
+/// <summary>
+/// What the host says is going on. <c>Speaking</c> is audio actually playing in
+/// the browser page, which the host learns from the speech bundle: a reply is
+/// read out after its turn has ended, so it cannot be inferred from turn state.
+/// </summary>
+public enum Activity { Idle, Awaiting, Thinking, Speaking }
 
 public enum SessionStatus { Running, Waiting, Done, Failed, Idle }
 
@@ -231,6 +236,8 @@ public sealed class Snapshot
         {
             "awaiting" => Activity.Awaiting,
             "thinking" => Activity.Thinking,
+            // Additive on the wire: a host that predates this label never sends it.
+            "speaking" => Activity.Speaking,
             "idle" => Activity.Idle,
             _ => Activity.Idle,
         };

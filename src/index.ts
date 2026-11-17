@@ -8,7 +8,9 @@
  * user's answer after turn/end, then Jarvis delivers a new UserMessage.
  *
  * Jarvis has no speech engine of its own: it talks out loud through the global
- * `speak` tool another bundle registers.
+ * `speak` tool another bundle registers. That bundle's optional `jarvisSpeech`
+ * service is read, when present, so /jarvis/state can report `speaking` and the
+ * orb can animate while a reply is actually being read out.
  *
  * Explicit memory tools and filtered temp capture use scoped stores; optional
  * DSH settings update runtime preferences, including opt-in low-risk question answering.
@@ -114,6 +116,19 @@ function listWorkerIds(ctx: Context, entry: JarvisConfig): string[] {
 /** Folder of a live session's cwd, so two sessions titled alike can be told apart. */
 function sessionWorkspace(ctx: Context, id: string): string | undefined {
   try { return workspaceName((ctx as any).get?.('sessions')?.get?.(id)?.header?.cwd); } catch { return undefined; }
+}
+
+/** Whether anything is audible right now, as reported by the speech bundle.
+ *
+ *  The `jarvisSpeech` service is provided by the bundle that owns speech, so it
+ *  is resolved opportunistically: absent, disabled or mid-reload must degrade to
+ *  "not speaking" — the orb then simply does not animate, and /jarvis/state stays
+ *  a valid answer. A throwing or half-built service is treated the same way. */
+function jarvisSpeaking(ctx: Context): boolean {
+  try {
+    const speech = (ctx as any).get?.('jarvisSpeech');
+    return typeof speech?.isSpeaking === 'function' ? speech.isSpeaking() === true : false;
+  } catch { return false; }
 }
 
 /** Batch-reads titles via sessionQuery.readTitleSnapshots.
@@ -678,10 +693,16 @@ export function apply(ctx: Context, rawConfig: unknown): (() => void) | void {
             const sessions = await sessionRows();
             const handed = sessions.filter((s) => s.managed);
             const pending = live.pending();
+            // A reply is read out *after* its turn has ended, so speaking is its
+            // own activity and outranks both thinking and idle: during playback
+            // the orb should show the voice, not the settle. The boolean is in the
+            // payload as well so a panel can react without decoding the label.
+            const speaking = jarvisSpeaking(ctx);
             sendJson(res, 200, {
               agentId: entry.jarvisSessionId,
               managed: managed.list(),
-              activity: live.activity(agentRunning(ctx, entry.jarvisSessionId)),
+              activity: speaking ? 'speaking' : live.activity(agentRunning(ctx, entry.jarvisSessionId)),
+              speaking,
               error: live.error(),
               counts: {
                 running: handed.filter((s) => s.status === 'running').length,

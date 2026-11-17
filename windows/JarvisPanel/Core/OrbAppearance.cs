@@ -1,6 +1,6 @@
 namespace JarvisPanel.Core;
 
-public enum OrbMotion { Idle, Awaiting, Thinking, Attention, Error }
+public enum OrbMotion { Idle, Awaiting, Thinking, Speaking, Attention, Error }
 
 public enum OrbTint { Cyan, Amber, Red }
 
@@ -23,9 +23,14 @@ public readonly record struct OrbAppearance(OrbMotion Motion, OrbTint Tint, Badg
 
 /// <summary>
 /// Spec §2.4 / §5.1: colour carries status (host error &gt; pending &gt; failed),
-/// motion carries activity (thinking &gt; status &gt; awaiting &gt; idle),
+/// motion carries activity (speaking &gt; thinking &gt; status &gt; awaiting &gt; idle),
 /// and the badge follows the same priority as the colour.
 /// </summary>
+/// <remarks>
+/// Speaking adds a motion and nothing else: the tint stays whatever the status
+/// says, so a host error or a pending approval still shows red or amber while the
+/// assistant talks. There is no speaking colour of its own.
+/// </remarks>
 public static class OrbStateResolver
 {
     public static OrbAppearance Resolve(Snapshot? snapshot, bool connected, bool standby)
@@ -43,7 +48,8 @@ public static class OrbStateResolver
         var tint = status;
 
         OrbMotion motion;
-        if (activity == Activity.Thinking) motion = OrbMotion.Thinking;
+        if (activity == Activity.Speaking) motion = OrbMotion.Speaking;
+        else if (activity == Activity.Thinking) motion = OrbMotion.Thinking;
         else if (tint == OrbTint.Red) motion = OrbMotion.Error;
         else if (tint == OrbTint.Amber) motion = OrbMotion.Attention;
         else if (activity == Activity.Awaiting || standby) motion = OrbMotion.Awaiting;

@@ -1,7 +1,7 @@
 /**
  * Live session state behind GET /jarvis/state: which sessions are running,
  * how their last turn ended, what is unread, and the approvals / questions
- * held for the悬浮窗. Pure bookkeeping — the DSH wiring lives in index.ts.
+ * held for the panel. Pure bookkeeping — the DSH wiring lives in index.ts.
  *
  * Held requests race the panel against the rest of the answerer chain (the
  * DSH window), so whichever answers first wins and the other one unmounts.
@@ -86,9 +86,9 @@ interface LastTurn { at: number; failed: boolean; error?: string }
 
 /** Turn-end kinds that count as a failure (the rest are success or user-initiated stops). */
 export const FAILED_KINDS: Readonly<Record<string, string>> = {
-  error: '模型调用失败',
-  blocked: '被拦截',
-  'max-tokens': '输出超长被截断',
+  error: 'the model call failed',
+  blocked: 'it was blocked',
+  'max-tokens': 'the output was too long and was cut off',
 };
 
 /** Requests settled faster than this (by another answerer) never reach the panel. */
@@ -184,7 +184,7 @@ export class LiveState {
     const turn: LastTurn = { at: this.now(), failed: label !== undefined };
     if (label !== undefined) {
       const detail = typeof reason?.error?.message === 'string' ? reason.error.message.trim() : '';
-      turn.error = detail ? `${label}：${detail.slice(0, 80)}` : label;
+      turn.error = detail ? `${label}: ${detail.slice(0, 80)}` : label;
     }
     this.lastTurns.set(session, turn);
     if (kind === 'completed' && session !== this.jarvisId) this.unread.add(session);
@@ -221,7 +221,7 @@ export class LiveState {
   /** Jarvis's own last failure, cleared when its next turn starts or on read. */
   error(): string | null {
     const turn = this.lastTurns.get(this.jarvisId);
-    return turn?.failed ? (turn.error ?? '上一轮失败') : null;
+    return turn?.failed ? (turn.error ?? 'the previous turn failed') : null;
   }
 
   isUnread(session: string): boolean { return this.unread.has(session); }

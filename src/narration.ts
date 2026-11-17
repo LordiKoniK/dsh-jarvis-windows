@@ -22,7 +22,7 @@ export function legacyNarration(judgeEnabled: unknown): Narration {
   return judgeEnabled === true ? 'relay' : 'self';
 }
 
-export const SELF_NARRATION_NOTE = '（做完后如果有 speak 工具，请用它以一两句口语向用户汇报结果，不要朗读书面回复。）';
+export const SELF_NARRATION_NOTE = '(When you are done, if a speak tool is available, use it to report the result to the user in one or two spoken sentences. Do not read your written reply aloud.)';
 
 /** What Jarvis sends a self-narrating session carries the speak request exactly once. */
 export function withNarrationNote(message: string, narration: Narration): string {

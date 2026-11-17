@@ -19,10 +19,12 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'jv-ask-intercept-')); tools = new Map(); listeners = new Map();
   calls = []; forwarded = []; order = []; patch = {}; verdict = { choice: '两空格', confidence: 0.85 };
   mock.method(LiveState.prototype, 'holdAsk', async (req: any, next: any) => { forwarded.push(req); return next(); });
-  services = { agents: new Map([['worker', { status: 'idle', followup() {}, session: { deriveMessages: () => [] } }]]),
+  services = { agents: { get: (id: string) => id === 'worker'
+      ? { status: 'idle', followup() {}, session: { deriveMessages: () => [] } } : undefined,
+    list: () => ['worker'],
+    create: (options: any) => { options.setup(ctx, undefined); return new Promise(() => {}); } },
     llm: { async *stream(request: any) { calls.push(request); yield { type: 'text-delta', text: JSON.stringify(verdict) }; yield { type: 'finish', reason: { kind: 'stop' } }; } },
-    settings: { installSection(_owner: any, _ns: string, _schema: any, base: any, h: any) { hooks = h; h.setSource(() => ({ ...base, ...patch })); h.onChange(); } },
-    agentLoop: { createAgent(_owner: any, options: any) { options.setup(ctx); return new Promise(() => {}); } } };
+    settings: { installSection(_owner: any, _ns: string, _schema: any, base: any, h: any) { hooks = h; h.setSource(() => ({ ...base, ...patch })); h.onChange(); } } };
   ctx = { get: (name: string) => services[name], provide(name: string, service: any) { services[name] = service; },
     inject(names: string[], callback: any) { if (names.every(name => name in services)) callback(ctx); },
     on(name: string, cb: any) { listeners.set(name, cb); }, tools: { register(tool: any) { tools.set(tool.name, tool); } }, logger: { warn() {} } };
@@ -30,7 +32,10 @@ beforeEach(() => {
 afterEach(async () => { dispose?.(); await flush(); mock.restoreAll(); syncBuiltinESMExports(); rmSync(dir, { recursive: true, force: true }); });
 async function start(extra: any = {}) {
   dispose = apply(ctx, { audioDir: dir, memoryRoot: dir, approvalsDir: join(dir, 'approvals'), lockFile: join(dir, 'lock.json'),
-    managedFile: join(dir, 'managed.json'), tasksFile: join(dir, 'tasks.json'), runtimeFile: join(dir, 'runtime.json'), ...extra });
+    managedFile: join(dir, 'managed.json'), tasksFile: join(dir, 'tasks.json'), runtimeFile: join(dir, 'runtime.json'),
+    // Explicit: this suite asserts the edge-tts synth argv, and the platform
+    // default is the local Kokoro backend, whose child takes different flags.
+    ttsBackend: 'edge', ...extra });
   await tools.get('manage_session').execute({ session: 'worker' });
   await tools.get('inject_to_session').execute({ session: 'worker', message: '保留现有项目风格' });
 }
@@ -65,7 +70,7 @@ describe('边界值', () => {
     for (let i = 0; i < 100 && records().length === 0; i++) await new Promise(r => setTimeout(r, 5));
     const rows = records(); assert.equal(rows.length, 1); assert.equal(rows[0].type, 'question/auto-answer');
     assert.equal(rows[0].question, '缩进使用什么？'); assert.equal(rows[0].choice, '两空格'); assert.equal(rows[0].confidence, 0.85);
-    await flush(); assert.match(spoken[0], /worker问了缩进使用什么？，我替你选了两空格/);
+    await flush(); assert.match(spoken[0], /worker asked "缩进使用什么？", so I chose 两空格 for you/);
     assert.ok(!('reasoning' in rows[0])); assert.ok(!('memory' in rows[0]));
   });
   it('forwards the original request untouched when uncertain, disabled live or not managed', async () => {

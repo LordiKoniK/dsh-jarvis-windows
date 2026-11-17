@@ -86,7 +86,7 @@ describe('等价类',()=>{
     assert.equal(await approve(),'allowed-once');assert.equal(calls,1);assert.equal(nextCalls,0);
     const html=(await records())[0];await flush();
     assert.match(html,/source="jarvis" reason="符合任务"/);assert.match(html,/tier value="grey"/);
-    assert.deepEqual(spoken,['替 worker 批准了 npm test']);
+    assert.deepEqual(spoken,['Approved for worker: npm test']);
   });
 });
 describe('边界值',()=>{

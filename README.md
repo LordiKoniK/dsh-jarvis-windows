@@ -93,10 +93,11 @@
 |---|---|---|---|
 | `locale` | "zh" / "en" | `"zh"` | 否 / No |
 | `audioDir` | string | `"~/.dsh/jarvis"` | 否 / No |
-| `ttsBackend` | "edge" | `"edge"` | 否 / No |
+| `ttsBackend` | "" / "edge" / "kokoro" | `""` | 否 / No |
 | `edgeVoice` | string | `"zh-CN-YunjianNeural"` | 是 / Yes |
 | `provider` | string | `""` | 是 / Yes |
 | `model` | string | `""` | 是 / Yes |
+| `reasoningEffort` | string | `""` | 是 / Yes |
 | `greetings` | string[] | `[]` | 是 / Yes |
 <!-- CONFIG:END -->
 

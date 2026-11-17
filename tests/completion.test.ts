@@ -71,7 +71,7 @@ describe('等价类', () => {
   it('满足后保存裁决并直接播报，不唤醒贾维斯', async () => {
     ledger.open('a', '需求');
     await judge.turnEnded('a', 'completed');
-    assert.deepEqual(spoken, ['hammer：已完成']);
+    assert.deepEqual(spoken, ['hammer: 已完成']);
     assert.equal(notices.length, 0);
     assert.equal(saved()[0].status, 'done');
     assert.equal(saved()[0].lastVerdict.verdict, 'satisfied');
@@ -86,10 +86,10 @@ describe('等价类', () => {
     await judge.turnEnded('a', 'completed');
     assert.equal(ledger.current('a')?.status, 'unsatisfied');
     assert.equal(spoken.length, 0);
-    assert.match(notices[0], /判断未满足/);
+    assert.match(notices[0], /judgement unsatisfied/);
     assert.ok(notices[0].includes(task.id));
     assert.ok(notices[0].includes('用户原话'));
-    assert.equal(await judge.askContinuation('a', task.id, async () => '继续'), '继续');
+    assert.equal(await judge.askContinuation('a', task.id, async () => 'Continue'), 'Continue');
     const next = ledger.open('a', '补测试');
     assert.equal(next.id, task.id);
     assert.equal(next.rounds, 1);
@@ -101,18 +101,18 @@ describe('等价类', () => {
     llm = stream('unsatisfied');
     const task = ledger.open('a', '需求');
     await judge.turnEnded('a', 'completed');
-    await judge.askContinuation('a', task.id, async () => '不用了');
+    await judge.askContinuation('a', task.id, async () => 'No thanks');
     assert.equal(saved()[0].status, 'dropped');
     judge.turnStarted('a');
     await judge.turnEnded('a', 'completed');
     assert.equal(calls.length, 1);
   });
 
-  for (const [kind, reason] of [['error', '模型调用失败'], ['blocked', '被拦截'], ['max-tokens', '输出超长被截断'], ['interrupted', '被中断']]) {
+  for (const [kind, reason] of [['error', 'the model call failed'], ['blocked', 'it was blocked'], ['max-tokens', 'the output was too long and was cut off'], ['interrupted', 'it was interrupted']]) {
     it(`${kind} 只播失败原因，任务保持 open`, async () => {
       ledger.open('a', '需求');
       await judge.turnEnded('a', kind);
-      assert.deepEqual(spoken, [`hammer失败了：${reason}`]);
+      assert.deepEqual(spoken, [`hammer failed: ${reason}`]);
       assert.equal(ledger.current('a')?.status, 'open');
       assert.equal(calls.length, 0);
     });
@@ -142,13 +142,13 @@ describe('边界值', () => {
     const task = ledger.open('a', '需求');
     ledger.bumpRound(task.id); ledger.bumpRound(task.id);
     await judge.turnEnded('a', 'completed');
-    assert.deepEqual(spoken, ['hammer还没做完：补测试，已经续了 2 次，交给你看看']);
+    assert.deepEqual(spoken, [`hammer isn't done yet: 补测试; it has continued 2 times, so it is over to you`]);
     assert.equal(notices.length, 0);
     assert.equal(saved()[0].status, 'done');
     config.maxContinueRounds = 0;
     ledger.open('b', '需求');
     await judge.turnEnded('b', 'completed');
-    assert.match(spoken[1], /已经续了 0 次/);
+    assert.match(spoken[1], /it has continued 0 times/);
   });
 
   it('判断开启但空回复或缺少模型仍走完成模板', async () => {
@@ -160,7 +160,7 @@ describe('边界值', () => {
       await judge.turnEnded('a', 'completed');
       assert.equal(saved().at(-1).lastVerdict.verdict, 'unclear');
     }
-    assert.deepEqual(spoken, Array(2).fill('hammer做完了'));
+    assert.deepEqual(spoken, Array(2).fill('hammer is done'));
     assert.equal(calls.length, 0);
   });
 
@@ -191,7 +191,7 @@ describe('边界值', () => {
     await judge.turnEnded('a', 'completed');
     judge.dispose();
     judge = createJudge();
-    await judge.askContinuation('a', task.id, async () => '不用了；我来处理');
+    await judge.askContinuation('a', task.id, async () => "No thanks; I'll handle it");
     assert.equal(saved()[0].status, 'dropped');
   });
 });
@@ -254,11 +254,11 @@ describe('异常路径', () => {
     const pending = judge.askContinuation('a', old.id, () => answer.promise);
     ledger.expect('a', '新需求');
     const fresh = ledger.open('a', '新指令');
-    answer.resolve('不用了');
-    assert.match(await pending, /已变化/);
+    answer.resolve('No thanks');
+    assert.match(await pending, /has changed/);
     assert.equal(ledger.current('a')?.id, fresh.id);
     assert.equal(ledger.current('a')?.status, 'open');
-    await assert.rejects(judge.askContinuation('a', old.id, async () => '继续'));
+    await assert.rejects(judge.askContinuation('a', old.id, async () => 'Continue'));
   });
 
   it('无效模型输出和超时降级模板，标题不可用回退 id', async () => {
@@ -266,12 +266,12 @@ describe('异常路径', () => {
     getTitle = () => { throw new Error('title unavailable'); };
     ledger.open('a', '需求');
     await judge.turnEnded('a', 'completed');
-    assert.deepEqual(spoken, ['a做完了']);
+    assert.deepEqual(spoken, ['a is done']);
     config.judgeTimeoutMs = 5;
     llm = { async *stream() { await new Promise(() => {}); } };
     ledger.open('b', '需求');
     await judge.turnEnded('b', 'completed');
-    assert.equal(spoken[1], 'b做完了');
+    assert.equal(spoken[1], 'b is done');
   });
 
   it('通知失败恢复 open，播报失败不影响之后新任务', async () => {

@@ -69,8 +69,8 @@ describe('等价类', () => {
 
   it('转述提示词以转述者口吻、把会话回复当作不可信材料', () => {
     const { system, prompt } = relayPrompt('全部测试通过');
-    assert.match(system, /转述/);
-    assert.match(system, /不可信/);
+    assert.match(system, /retelling/);
+    assert.match(system, /untrusted/);
     assert.equal(prompt, '全部测试通过');
   });
 

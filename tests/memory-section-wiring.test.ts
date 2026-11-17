@@ -19,9 +19,9 @@ function start() {
   const agent: any = { get: (name: string) => name === 'systemPrompt' ? sp : undefined,
     inject: (names: string[], callback: any) => { if (names[0] === 'systemPrompt') callback(agent); },
     on: (name: string, callback: any) => hooks.set(name, callback), tools: { register: (tool: any) => tools.set(tool.name, tool) } };
-  const loop = { createAgent: async (_: unknown, options: any) => { options.setup(agent); return { agent: { followup() {} } }; } };
-  const ctx: any = { get: (name: string) => name === 'agentLoop' ? loop : undefined,
-    inject: (names: string[], callback: any) => { if (names[0] === 'agentLoop') callback(ctx); },
+  const agents = { get: () => undefined, create: async (options: any) => { options.setup(agent, undefined); return { agent: { followup() {} } }; } };
+  const ctx: any = { get: (name: string) => name === 'agents' ? agents : undefined,
+    inject: (names: string[], callback: any) => { if (names[0] === 'agents') callback(ctx); },
     on: (name: string, callback: any) => globalHooks.set(name, callback), provide() {} };
   dispose = apply(ctx, { memoryRoot: root, audioDir: root, lockFile: join(root, 'lock.json'), approvalsDir: join(root, 'memory', 'approvals'),
     managedFile: join(root, 'managed.json'), tasksFile: join(root, 'tasks.json') });
@@ -44,7 +44,7 @@ describe('等价类', () => {
     assert.equal(globalHooks.has('system-prompt/assemble'), false);
     let reached = false;
     const result = await assemble({}, assembly => { reached = true; assert.match(memory(assembly).text, /用中文回复/); });
-    assert.ok(reached); assert.match(renderPrompt(result), /你是贾维斯/);
+    assert.ok(reached); assert.match(renderPrompt(result), /You are Jarvis/);
     assert.match(memory(result).text, /用中文回复/);
   });
   it('remember后下一次组装刷新，其他会话记忆不进入section', async () => {
@@ -66,7 +66,7 @@ describe('等价类', () => {
 describe('边界值', () => {
   it('空库section为空，宿主render不会显示长期记忆标题', async () => {
     start(); assert.equal(memory(await assemble()).text, '');
-    assert.doesNotMatch(renderPrompt(await assemble()), /长期记忆/);
+    assert.doesNotMatch(renderPrompt(await assemble()), /Long-term memory/);
   });
   it('删除最后一条后section恢复空串', async () => {
     await store.writeLong('general', entry('one')); start(); await assemble();
@@ -84,7 +84,7 @@ describe('异常路径', () => {
   it('读失败不阻断prompt，保留persona并在后续恢复', async () => {
     start();
     const read = mock.method(MemoryStore.prototype, 'snapshotLong', async () => { throw Error('disk'); });
-    assert.match(renderPrompt(await assemble()), /你是贾维斯/);
+    assert.match(renderPrompt(await assemble()), /You are Jarvis/);
     assert.equal(memory(await assemble()).text, '');
     read.mock.restore();
     await store.writeLong('general', entry('recovered'));

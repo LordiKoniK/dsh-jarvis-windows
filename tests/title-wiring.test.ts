@@ -26,6 +26,8 @@ let rejectCreate: (error: Error) => void;
 let resolveResume: (handle: any) => void;
 let rejectResume: (error: Error) => void;
 let resumeCalls: number;
+let created: boolean;
+let sessionsUnavailable: boolean;
 let handler: any;
 
 beforeEach(async () => {
@@ -38,6 +40,8 @@ beforeEach(async () => {
   messages = [];
   warnings = [];
   resumeCalls = 0;
+  created = false;
+  sessionsUnavailable = false;
   session = { id: 'jarvis-title-test' };
   handle = { agent: { followup: (message: unknown) => messages.push(message) },
     session: { deriveMessages: () => { throw new Error('不应读取诊断消息'); } } };
@@ -46,16 +50,27 @@ beforeEach(async () => {
   }));
   syncBuiltinESMExports();
   services = {
-    sessions: new Map([[session.id, session]]),
+    // The store is empty until a create/resume resolves — that is what makes
+    // the resolve path choose creation — and holds the Session afterwards,
+    // which is what the title read sees.
+    sessions: { get: () => !sessionsUnavailable && created ? session : undefined },
     sessionTitle: {
       get: (value: any) => { reads.push(value); return title; },
       rename: (value: any, wanted: string) => { renames.push([value, wanted]); title = wanted; },
     },
-    agentLoop: {
-      createAgent: () => new Promise((resolve, reject) => { resolveCreate = resolve; rejectCreate = reject; }),
+    agents: {
+      get: () => undefined,
+      list: () => [],
+      create: () => new Promise((resolve, reject) => {
+        resolveCreate = (value: any) => { created = true; resolve(value); };
+        rejectCreate = reject;
+      }),
       resume: () => {
         resumeCalls++;
-        return new Promise((resolve, reject) => { resolveResume = resolve; rejectResume = reject; });
+        return new Promise((resolve, reject) => {
+          resolveResume = (value: any) => { created = true; resolve(value); };
+          rejectResume = reject;
+        });
       },
     },
     webServer: { register: (route: any) => { handler = route.handler; } },
@@ -84,7 +99,7 @@ async function startPlugin(): Promise<void> {
     managedFile: join(dir, 'managed.json'), tasksFile: join(dir, 'tasks.json'),
     runtimeFile: join(dir, 'runtime.json'),
   });
-  // Keep the resume greeting within the real route's muted path.
+  // The panel mutes the voice so the restart greeting stays silent in tests.
   const req = Object.assign(new EventEmitter(), {
     url: '/jarvis/voice', method: 'POST', socket: { remoteAddress: '127.0.0.1' },
     headers: { authorization: `Bearer ${JSON.parse(readFileSync(join(dir, 'runtime.json'), 'utf8')).token}` },
@@ -122,27 +137,31 @@ function endTurn(): void {
 
 describe('等价类', () => {
   it('创建成功后用 sessions 中的会话对象读取并 rename，随后仍启动首轮', async () => {
+    await flush();
     assert.equal(reads.length, 0);
     resolveCreate(handle);
     await flush();
     assert.deepEqual(reads, [session]);
-    assert.deepEqual(renames, [[session, '贾维斯']]);
+    assert.deepEqual(renames, [[session, 'Jarvis']]);
     assert.equal(messages.length, 1);
   });
 
   it('恢复成功后设置标题，恢复完成之前不写入', async () => {
-    rejectCreate(new Error('session already exists'));
-    await flush();
-    assert.equal(resumeCalls, 1);
+    created = true; // a live Session is what resolves through resume
+    await startPlugin();
+    assert.equal(resumeCalls, 1, 'a live session resolves through resume');
     assert.equal(reads.length, 0);
     resolveResume(handle);
     await flush();
-    assert.deepEqual(renames, [[session, '贾维斯']]);
+    assert.deepEqual(renames, [[session, 'Jarvis']]);
+    // Resumed history means the greeting path, not the first-install kickstart.
+    assert.equal(messages.length, 0);
     assert.match(readFileSync(join(dir, 'debug.log'), 'utf8'), /speakGreeting:.*muted/);
   });
 
   it('标题已相同时读取一次但不追加 rename', async () => {
-    title = '贾维斯';
+    await flush();
+    title = 'Jarvis';
     resolveCreate(handle);
     await flush();
     assert.deepEqual(reads, [session]);
@@ -160,7 +179,7 @@ describe('边界值', () => {
     assert.equal(reads.length, 0);
     attachTitle(service);
     await flush();
-    assert.deepEqual(renames, [[session, '贾维斯']]);
+    assert.deepEqual(renames, [[session, 'Jarvis']]);
     title = '其他标题';
     attachTitle(service);
     await flush();
@@ -168,6 +187,7 @@ describe('边界值', () => {
   });
 
   it('轮末不重设标题，也不派生消息或留下诊断日志', async () => {
+    await flush();
     resolveCreate(handle);
     await flush();
     title = '用户改过的标题';
@@ -180,7 +200,7 @@ describe('边界值', () => {
 });
 
 describe('异常路径', () => {
-  it('创建失败且无法恢复时不尝试标题', async () => {
+  it('会话不存在且创建失败时不尝试标题，也不误走恢复', async () => {
     rejectCreate(new Error('provider unavailable'));
     await flush();
     attachTitle();
@@ -188,9 +208,10 @@ describe('异常路径', () => {
     assert.equal(resumeCalls, 0);
   });
 
-  it('恢复失败时不尝试标题', async () => {
-    rejectCreate(new Error('session already exists'));
-    await flush();
+  it('会话已存储但恢复也失败时不尝试标题', async () => {
+    created = true; // a live Session is what resolves through resume
+    await startPlugin();
+    assert.equal(resumeCalls, 1, 'a live session resolves through resume');
     rejectResume(new Error('session not live'));
     await flush();
     attachTitle();
@@ -198,7 +219,10 @@ describe('异常路径', () => {
   });
 
   it('会话不存在时跳过，仍启动首轮', async () => {
-    services.sessions.clear();
+    // The store never reports a live Session for the id, yet creation succeeds:
+    // the title read skips and the first-install turn still runs.
+    sessionsUnavailable = true;
+    await startPlugin();
     resolveCreate(handle);
     await flush();
     assert.deepEqual(renames, []);

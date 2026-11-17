@@ -5,7 +5,7 @@ import { approvalMemory } from './approval.ts';
 export interface RememberArgs { content: string; tag?: string; session?: string; expiresDays?: number }
 export interface RecallArgs { query: string; session?: string; limit?: number }
 const DAY = 86_400_000;
-const EMPTY = '没有找到相关记忆';
+const EMPTY = 'No matching memories found';
 const singleLine = (value: string) => value.replace(/\s+/g, ' ').trim();
 function required(value: string, name: string): string {
   if (typeof value !== 'string' || !value.trim()) throw Error(`${name} must not be empty`);
@@ -41,7 +41,7 @@ export async function remember(store: MemoryStore, args: RememberArgs, now = Dat
     ...(expiration === undefined ? {} : { expires: new Date(expiration).toISOString() }),
     ...splitContent(content),
   });
-  return '记住了';
+  return 'Remembered';
 }
 
 function tokens(query: string): string[] {
@@ -63,7 +63,7 @@ export async function recall(store: MemoryStore, args: RecallArgs, now = Date.no
   const limit = Math.max(0, Math.min(10, Math.floor(args.limit ?? 5)));
   const words = tokens(query);
   if (!limit || !words.length) return EMPTY;
-  const scopes = ['general', ...(session === 'general' ? [] : [session]), ...(/审批|批准|拒绝/.test(query) ? ['approvals'] : [])];
+  const scopes = ['general', ...(session === 'general' ? [] : [session]), ...(/approval|approved|rejected|denied/i.test(query) ? ['approvals'] : [])];
   const results: { key: string; tag: string; source: string; created: number; score: number; file: string }[] = [];
   for (const scope of scopes) {
     for (const file of await store.listLong(scope)) {
@@ -79,5 +79,5 @@ export async function recall(store: MemoryStore, args: RecallArgs, now = Date.no
     }
   }
   results.sort((a, b) => b.score - a.score || b.created - a.created || a.source.localeCompare(b.source) || a.file.localeCompare(b.file));
-  return results.slice(0, limit).map(entry => `- [${singleLine(entry.tag)}] ${singleLine(entry.key)}（来源：${singleLine(entry.source)}，${new Date(entry.created).toISOString().slice(0, 10)}）`).join('\n') || EMPTY;
+  return results.slice(0, limit).map(entry => `- [${singleLine(entry.tag)}] ${singleLine(entry.key)} (source: ${singleLine(entry.source)}, ${new Date(entry.created).toISOString().slice(0, 10)})`).join('\n') || EMPTY;
 }

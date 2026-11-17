@@ -20,7 +20,7 @@ afterEach(async () => { mock.restoreAll(); await rm(root, { recursive: true, for
 
 describe('等价类', () => {
   it('remember拆第一句写general，保存tag、source、时间和到期日', async () => {
-    assert.equal(await remember(store, { content: ' 用中文回复。请简洁说明。 ', tag: '偏好', expiresDays: 2 }, now), '记住了');
+    assert.equal(await remember(store, { content: ' 用中文回复。请简洁说明。 ', tag: '偏好', expiresDays: 2 }, now), 'Remembered');
     const [file] = await store.listLong('general');
     const entry = parseMemory((await store.readLong('general', file))!)!;
     assert.equal(entry.key, '用中文回复。'); assert.equal(entry.detail, '请简洁说明。');
@@ -52,8 +52,8 @@ describe('等价类', () => {
     await store.writeLong('general', note('key-new', { key: 'choice new' }));
     const text = await recall(store, { query: 'CHOICE' }, now);
     assert.deepEqual(lines(text), [
-      '- [note] choice new（来源：general，2026-09-24）', '- [note] choice old（来源：general，2026-09-24）',
-      '- [choice] tag-new（来源：general，2026-09-24）', '- [note] detail-new（来源：general，2026-09-24）',
+      '- [note] choice new (source: general, 2026-09-24)', '- [note] choice old (source: general, 2026-09-24)',
+      '- [choice] tag-new (source: general, 2026-09-24)', '- [note] detail-new (source: general, 2026-09-24)',
     ]);
     assert.equal(text.includes('SECRET'), false);
   });
@@ -67,7 +67,7 @@ describe('等价类', () => {
     for (const scope of ['general', 'a', 'b']) await store.writeLong(scope, note(scope, { key: 'shared', session: 'forged' }));
     assert.equal(lines(await recall(store, { query: 'shared' }, now)).length, 1);
     const text = await recall(store, { query: 'shared', session: 'a' }, now);
-    assert.equal(lines(text).length, 2); assert.match(text, /来源：a/); assert.doesNotMatch(text, /forged|来源：b/);
+    assert.equal(lines(text).length, 2); assert.match(text, /source: a,/); assert.doesNotMatch(text, /forged|source: b/);
   });
   it('审批关键词启用J3 HTML检索，解码转义且只返回关键点与来源', async () => {
     await writeApproval(store, {
@@ -76,10 +76,10 @@ describe('等价类', () => {
       context: 'SECRET detail', decision: { allow: false, source: 'user', reason: 'reason' }, tier: { value: '', notes: '' },
     });
     assert.equal(lines(await recall(store, { query: 'echo' }, now)).length, 0);
-    for (const query of ['审批 echo', '拒绝']) {
+    for (const query of ['approval echo', 'denied']) {
       const text = await recall(store, { query }, now);
-      assert.match(text, /\[审批\] 拒绝 bash: echo <你好> & "ok"/);
-      assert.match(text, /来源：worker，2026-09-24/);
+      assert.match(text, /\[approval\] denied bash: echo <你好> & "ok"/);
+      assert.match(text, /source: worker, 2026-09-24/);
       assert.doesNotMatch(text, /SECRET|sensitive args/);
     }
   });
@@ -120,13 +120,13 @@ describe('边界值', () => {
       operation: { tool: 'bash', command: 'x'.repeat(200) + ' unique-tail', args: '' }, context: '',
       decision: { allow: true, source: 'user', reason: '' }, tier: { value: '', notes: '' },
     });
-    const text = await recall(store, { query: '批准 unique-tail' }, now);
+    const text = await recall(store, { query: 'approved unique-tail' }, now);
     assert.equal(lines(text).length, 1); assert.equal(text.includes('unique-tail'), false);
     assert.ok(text.length < 220);
   });
   it('空库、不存在会话、纯标点query返回空结果', async () => {
     for (const args of [{ query: 'x' }, { query: 'x', session: 'missing' }, { query: '?!。' }]) {
-      assert.equal(await recall(store, args, now), '没有找到相关记忆');
+      assert.equal(await recall(store, args, now), 'No matching memories found');
     }
   });
 });
@@ -153,7 +153,7 @@ describe('异常路径', () => {
     };
     const html = renderApprovalHtml(record);
     const parsed = approvalMemory(html)!;
-    assert.equal(parsed.key, `批准 ${raw}: ${raw}`); assert.equal(parsed.session, raw);
+    assert.equal(parsed.key, `approved ${raw}: ${raw}`); assert.equal(parsed.session, raw);
     assert.ok(parsed.detail.includes(raw));
     for (const broken of [html.slice(0, -15), html.replace('allow="true"', 'allow="maybe"'),
       html.replace(record.ts, 'invalid'), html.replace('&lt;', '&bad;'),

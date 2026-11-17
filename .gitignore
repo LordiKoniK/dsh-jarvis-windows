@@ -8,3 +8,10 @@ macos/.build/
 macos/.modulecache/
 macos/jarvis-panel
 macos/edge-sketch
+
+# Windows panel build output. The sources under windows/JarvisPanel are tracked;
+# these are the .NET intermediate and publish directories, plus the exe the host
+# plugin spawns.
+windows/dist/
+windows/**/obj/
+windows/**/bin/

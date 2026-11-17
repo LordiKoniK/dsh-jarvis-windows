@@ -39,7 +39,7 @@ export function approvalMemory(html: string): ApprovalMemory | undefined {
   const record = parseApprovalRecord(html);
   if (!record) return undefined;
   const { operation, decision } = record;
-  const summary = `${decision.allow ? '批准' : '拒绝'} ${operation.tool}: ${operation.command}`;
-  return { tag: '审批', key: Array.from(summary).slice(0, 160).join(''), session: record.session.id,
+  const summary = `${decision.allow ? 'approved' : 'denied'} ${operation.tool}: ${operation.command}`;
+  return { tag: 'approval', key: Array.from(summary).slice(0, 160).join(''), session: record.session.id,
     created: record.ts, detail: [record.fingerprint, operation.command, operation.args, record.context, decision.reason].join(' ') };
 }

@@ -28,7 +28,7 @@ export function renderApprovalHtml(record: ApprovalRecord): string {
   <session id="${e(session.id)}" cwd="${e(session.cwd)}" managed="${e(session.managed)}">${e(session.id)} — ${e(session.cwd)}</session>
   <operation tool="${e(operation.tool)}" command="${e(operation.command)}" args="${e(operation.args)}">${e(operation.tool)}: ${e(operation.command)}</operation>
   <context>${e(record.context)}</context>
-  <decision allow="${e(decision.allow)}" source="${e(decision.source)}" reason="${e(decision.reason)}">${decision.allow ? '批准' : '拒绝'}</decision>
+  <decision allow="${e(decision.allow)}" source="${e(decision.source)}" reason="${e(decision.reason)}">${decision.allow ? 'approved' : 'denied'}</decision>
   <tier value="${e(tier.value)}" notes="${e(tier.notes)}" />
 </approval>
 `;
@@ -36,7 +36,11 @@ export function renderApprovalHtml(record: ApprovalRecord): string {
 
 export function approvalFileName(fp: string, ts: string): string {
   const stamp = new Date(ts).toISOString().slice(0, 19).replace(/[-:]/g, '');
-  const stem = fp.toLowerCase().replace(/[^a-z0-9:._-]+/g, '-').replace(/^[.:-]+/, '').slice(0, 160) || 'approval';
+  // The colon must not survive into the file name: fingerprints look like
+  // "bash:test-foo", and although `:` is a legal POSIX filename character it is
+  // reserved on Windows, where write/link then fails with EINVAL and no approval
+  // record is stored at all. The `safe()` helper above already excludes it.
+  const stem = fp.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[.:-]+/, '').slice(0, 160) || 'approval';
   return `${stem}-${stamp}.html`;
 }
 

@@ -60,23 +60,63 @@ import { routedInput, toConversation } from './conversation.ts';
 const here = dirname(fileURLToPath(import.meta.url));
 const pkgRoot = join(here, '..');
 
+/** The host half is platform-neutral except for three seams — the panel binary,
+ *  the speech player and raising the DSH window. macOS keeps its original paths. */
+const onWindows = process.platform === 'win32';
+
+/** Python 3.13 from the per-user install — the interpreter this deployment has
+ *  kokoro-onnx, onnxruntime and numpy installed in. Overridable via `pythonPath`. */
+const defaultPythonPath = onWindows
+  ? join(homedir(), 'AppData', 'Local', 'Programs', 'Python', 'Python313', 'python.exe')
+  : 'python3';
+
+/** Kokoro model directory: the DSH data directory, so it is neither inside this
+ *  package nor tied to one user's home layout. Overridable via `kokoroModelDir`. */
+const defaultKokoroModelDir = join(homedir(), '.dsh', 'models', 'kokoro');
+
 /** Captured host webServer origin once webServer injects fire — reused to call
  *  voice-mini's same-host /voice-mini/test endpoint for chime+TTS greetings. */
 let webOrigin: string | null = null;
 
-/** The Jarvis agent handle (from createAgent/resume). Stored so /jarvis/input
+/** The Jarvis agent handle (from create/resume). Stored so /jarvis/input
  *  can inject user messages into the agent (user → jarvis → response). */
-let jarvisHandle: any = null;
+let jarvisHandle: { agent: any } | null = null;
 
-/** Set from the悬浮窗 voice button; suppresses greetings until unmuted. */
+/** Creation surface of the `agents` service: `create`/`resume` are traced
+ *  through the SERVICE's own context, so the agent's session stays attached to
+ *  the SessionStore for the whole app lifetime instead of dying with the
+ *  plugin context that asked for it. */
+interface AgentsService {
+  get(id: string): any;
+  create(options: Record<string, unknown>): Promise<{ agent: any }>;
+  resume(options: Record<string, unknown>): Promise<{ agent: any }>;
+}
+
+/** The persisted-session existence probe. A session whose file exists must be
+ *  resumed; `agents.create` refuses an id the SessionStore still holds. */
+interface SessionStoreService {
+  get(id: string): unknown;
+}
+
+/** One Jarvis agent resolved for this apply — live-and-reused, resumed, or freshly created. */
+interface SettledJarvis {
+  handle: { agent: any };
+  /** True when persisted history was behind the session, which is the greeting path. */
+  existed: boolean;
+}
+
+/** Set from the panel's voice button; suppresses greetings until unmuted. */
 let voiceMuted = false;
 let playingChild: ChildProcess | null = null;
 
 /** Session titles for /jarvis/state, refreshed at most every 10s. */
 const titleCache: { at: number; map: Record<string, string> } = { at: 0, map: {} };
 
-/** Stops the built-in afplay playback. voice-mini playback is out of our reach. */
+/** Stops the built-in speech child (macOS afplay / Windows PowerShell player).
+ *  voice-mini playback is out of our reach. */
 function stopSpeech(): void {
+  // Windows has no SIGTERM to deliver — there kill() terminates the child
+  // outright, which ends its audio with it.
   if (playingChild && !playingChild.killed) { try { playingChild.kill('SIGTERM'); } catch {} }
   playingChild = null;
 }
@@ -147,9 +187,24 @@ export const Config = z.object({
   approvalsDir: z.string().default('~/.dsh/jarvis/memory/approvals'),
   lockFile: z.string().default('~/.dsh/jarvis/lock.json'),
   runtimeFile: z.string().default('~/.dsh/jarvis/runtime.json'),
-  titlePrefix: z.string().default('贾维斯-'),
-  ttsBackend: z.union(['edge']).default('edge'),
+  titlePrefix: z.string().default('Jarvis-'),
+  // Empty means "unset": resolveTtsBackend() then picks the platform default
+  // (kokoro on Windows, edge elsewhere). A schema default of 'edge' filled the
+  // field in on every platform, which made that platform fallback dead code and
+  // silently pointed Windows at the cloud backend. An explicit 'edge' or
+  // 'kokoro' still wins, so existing profiles keep their chosen backend.
+  ttsBackend: z.union(['', 'edge', 'kokoro']).default(''),
   edgeVoice: z.string().default('zh-CN-YunjianNeural'),
+  kokoroVoice: z.string().default('af_heart'),
+  pythonPath: z.string().default(defaultPythonPath),
+  kokoroModelDir: z.string().default(defaultKokoroModelDir),
+  // fp32, never the int8 export: int8 measured a real-time factor of ~1.15 on
+  // this machine — slower than playback — against ~0.32 for fp32.
+  kokoroModelFile: z.string().default('kokoro-v1.0.onnx'),
+  kokoroVoicesFile: z.string().default('voices-v1.0.bin'),
+  // Deliberately not every core. Uncapped inference drove the package to ~89 C
+  // and into thermal throttling; 4 threads still runs 2.5x faster than playback.
+  kokoroThreads: z.number().default(4),
   archiveIdleDays: z.number().default(7),
   judgeEnabled: z.boolean().default(true),
   askInterception: z.boolean().default(false),
@@ -164,30 +219,35 @@ export const Config = z.object({
   // when the agent is created — never a hardcoded vendor default.
   provider: z.string().default(''),
   model: z.string().default(''),
+  // Deliberately empty by default: DSH resolves a reasoning effort of its own
+  // when none is passed, and an explicit default here would silently change the
+  // agent for every existing user. Empty means "pass nothing at all".
+  reasoningEffort: z.string().default(''),
   jarvisSessionId: z.string().default('jarvis'),
   jarvisCwd: z.string().default('~/jarvis'),
-  // Restart welcome greetings (random pick). Built-in zh [欢迎回来,欢迎回归] /
-  // en [Welcome back!,Welcome!] are always included; entries here are ADDED.
+  // Restart welcome greetings (random pick). The built-in English list
+  // [Welcome back!, Welcome!] is always included; entries here are ADDED.
   greetings: z.array(z.string()).default([]),
 });
 
 /** The settings page intentionally omits composition-owned paths and identity. */
 export const SettingsSchema = z.object({
-  provider: Config.dict!.provider.description('贾维斯模型提供方；留空自动选取第一个可用提供方；重启 DSH 生效。'),
-  model: Config.dict!.model.description('贾维斯模型；留空自动选取该提供方的第一个模型；重启 DSH 生效。'),
-  edgeVoice: Config.dict!.edgeVoice.description('内置语音音色（voice-mini 不可用时）；下一次播报生效。'),
-  greetings: Config.dict!.greetings.description('附加欢迎语；重启欢迎时随机选用。'),
-  askInterception: Config.dict!.askInterception.description('允许贾维斯代答托管会话的低风险选择题；默认关闭，不确定时仍交给你。'),
-  autoApprove: Config.dict!.autoApprove.description('自动审批：off 关闭，safe 仅只读白名单，safe+grey 启用灰色模型判断及中危预设/历史依据；高危始终交给你。下一次请求生效。'),
-  managedNarration: Config.dict!.managedNarration.description('托管会话默认播报方式：self 由会话自己用 speak 汇报（省贾维斯的 token），relay 由贾维斯总结后以转述口吻播报；可在悬浮窗按会话单独切换。下一轮结束生效。'),
-  judgeEnabled: Config.dict!.judgeEnabled.description('启用任务完成判断；下一次判断生效。'),
-  judgeProvider: Config.dict!.judgeProvider.description('判断模型提供方；留空使用当前贾维斯提供方。'),
-  judgeModel: Config.dict!.judgeModel.description('判断模型；留空使用当前贾维斯模型。'),
+  provider: Config.dict!.provider.description('Model provider for Jarvis. Leave empty to pick the first available provider automatically. Takes effect after a DSH restart.'),
+  model: Config.dict!.model.description('Model for Jarvis. Leave empty to pick that provider\'s first model automatically. Takes effect after a DSH restart.'),
+  reasoningEffort: Config.dict!.reasoningEffort.description('Reasoning effort for Jarvis (for example low / medium / high, depending on the provider). Leave empty to let DSH decide. Takes effect after a DSH restart.'),
+  edgeVoice: Config.dict!.edgeVoice.description('Built-in speech voice (used when voice-mini is unavailable). Takes effect on the next announcement.'),
+  greetings: Config.dict!.greetings.description('Extra welcome messages, picked at random for the restart greeting.'),
+  askInterception: Config.dict!.askInterception.description('Let Jarvis answer low-risk multiple-choice questions in managed sessions for you. Off by default; anything uncertain still comes to you.'),
+  autoApprove: Config.dict!.autoApprove.description('Automatic approval: off disables it, safe covers only the read-only allowlist, safe+grey adds the grey-area model judgement plus medium-risk presets and history. High risk always comes to you. Takes effect on the next request.'),
+  managedNarration: Config.dict!.managedNarration.description('Default announcement style for managed sessions: self has the session report with its own speak tool (saves Jarvis tokens), relay has Jarvis summarise and retell it in its own words. Switchable per session in the panel. Takes effect at the end of the next turn.'),
+  judgeEnabled: Config.dict!.judgeEnabled.description('Enable task-completion judging. Takes effect on the next judgement.'),
+  judgeProvider: Config.dict!.judgeProvider.description('Model provider used for judging. Leave empty to use the current Jarvis provider.'),
+  judgeModel: Config.dict!.judgeModel.description('Model used for judging. Leave empty to use the current Jarvis model.'),
   judgeTimeoutMs: Config.dict!.judgeTimeoutMs.min(SETTINGS_LIMITS.minTimeout).max(SETTINGS_LIMITS.maxTimeout).step(1)
-    .description('判断超时（毫秒，1000–120000）；下一次判断生效。'),
+    .description('Judging timeout in milliseconds (1000–120000). Takes effect on the next judgement.'),
   maxContinueRounds: Config.dict!.maxContinueRounds.min(0).max(SETTINGS_LIMITS.maxRounds).step(1)
-    .description('最多续做次数（0–10）；0 表示不再询问续做。'),
-}).description('贾维斯');
+    .description('Maximum number of continuation rounds (0–10); 0 never asks about continuing.'),
+}).description('Jarvis');
 
 interface JarvisConfig {
   locale: string;
@@ -201,6 +261,12 @@ interface JarvisConfig {
   titlePrefix: string;
   ttsBackend: string;
   edgeVoice: string;
+  kokoroVoice: string;
+  pythonPath: string;
+  kokoroModelDir: string;
+  kokoroModelFile: string;
+  kokoroVoicesFile: string;
+  kokoroThreads: number;
   archiveIdleDays: number;
   judgeEnabled: boolean;
   askInterception: boolean;
@@ -212,6 +278,7 @@ interface JarvisConfig {
   maxContinueRounds: number;
   provider: string;
   model: string;
+  reasoningEffort: string;
   jarvisSessionId: string;
   jarvisCwd: string;
   greetings: string[];
@@ -234,19 +301,27 @@ function debug(entry: JarvisConfig, msg: string): void {
   } catch { /* silent */ }
 }
 
+/** Agent options for createAgent/resume. reasoningEffort is omitted entirely
+ *  when unset, so DSH resolves its own default exactly as it did before this
+ *  key existed; passing an empty string would be a different request. */
+function agentOptions(entry: JarvisConfig): { provider: string; model: string; reasoningEffort?: string } {
+  const effort = entry.reasoningEffort.trim();
+  return { provider: entry.provider, model: entry.model, ...(effort ? { reasoningEffort: effort } : {}) };
+}
+
 const COMMANDER_PERSONA = [
-  '## 你是贾维斯(Jarvis)',
-  '你是用户的管家/指挥官。你管着多个会话(worker):用户在悬浮窗选中一个会话、打字给你,你优化说法后用 inject_to_session 发给那个会话。',
-  '- 你只能向托管集里的会话发内容。用户说"把某某会话交给你/你来管"时,先 list_managed 找到它的 id,再 manage_session;说"不用管了"就 release_session。',
-  '- 你不堆 worker 的内容进自己记忆;worker 各自干净。你只干路由/口播/inject 决策/续轮判断。',
-  '- 不能 inject_to_session 给自己。',
-  '- 托管会话有两种播报方式：self 由会话自己用 speak 汇报（你转发时系统会自动附上汇报要求，你别再重复），relay 由你在它做完后转述。用户说"让它自己汇报/你来转述"时用 set_session_narration 切换。',
-  '- 要对用户说话用 say_to_user;需要用户拍板时用 ask_user,拿到回答再继续。',
-  '- 收到以 [会话 … 判断未满足] 开头的通知时，按通知要求用 ask_user 询问并传入 session 和 task，不要自己决定续做。用户选继续才用 inject_to_session 发送具体续做指令；选不用了就结束。回答已失效时不要再发送旧续做指令。',
-  '- 审批你只 relay 用户决定,不自作主张批准。',
-  '- 用户要查看或撤销审批预设时，用 list_approval_rules / remove_approval_rule；删除时原样传回 fingerprint、tool、workspace。只有用户在审批卡片点总是允许才能创建预设；是否自动审批由用户设置决定，你不能自行扩大授权。',
-  "- 用户说'记住…'就用 remember；需要回忆过去的约定或决定时先 recall。",
-  '- 一两句话,别读代码/路径/markdown 出来。',
+  '## You are Jarvis',
+  'You are the user\'s butler and commander. You look after several sessions (workers): the user selects one in the panel and types to you, and you improve the wording before sending it to that session with inject_to_session.',
+  '- You may only send content to sessions in the managed set. When the user says "hand session X over to you" or "you look after it", first find its id with list_managed, then use manage_session; when they say "you can stop looking after it", use release_session.',
+  '- You do not pile worker content into your own memory; workers stay clean. You only handle routing, spoken announcements, inject decisions and continuation judgement.',
+  '- You cannot inject_to_session to yourself.',
+  '- A managed session has two announcement styles: self has the session report with its own speak tool (the system appends the report request automatically when you forward, so do not repeat it), and relay has you retell the result once it is done. When the user says "let it report for itself" or "you retell it", switch with set_session_narration.',
+  '- Use say_to_user to speak to the user; use ask_user when the user has to make the call, then continue once you have the answer.',
+  '- When you receive a notice beginning [Session … judgement unsatisfied], do what the notice asks: ask with ask_user and pass the session and task it carries, and do not decide about continuing yourself. Only send a concrete continuation instruction with inject_to_session if the user chooses to continue; finish if they decline. If the answer is no longer valid, do not send the old continuation instruction again.',
+  '- For approvals you only relay the user\'s decision; never approve on your own initiative.',
+  '- When the user wants to see or revoke approval presets, use list_approval_rules / remove_approval_rule; pass fingerprint, tool and workspace back unchanged when removing. A preset can only be created when the user clicks always allow on an approval card; whether approvals run automatically is decided by the user\'s settings, and you must not widen the authorisation yourself.',
+  "- When the user says 'remember …', use remember; use recall first when you need to recall a past agreement or decision.",
+  '- One or two sentences; never read out code, paths or markdown.',
 ].join('\n');
 
 /** What Jarvis's tools need from the running plugin. */
@@ -267,45 +342,144 @@ interface JarvisDeps {
 
 type SpeakResult = 'voice-mini' | 'built-in' | 'muted' | 'failed';
 
-/** Built-in TTS: edge-tts (free Microsoft neural voices) synthesized in a
- *  child process (the WebSocket flakes ~50% in the Electron main process but is
- *  100% reliable in plain Node), then played via macOS `afplay`. No LLM. */
-function makeBuiltInTTS(voice: () => string) {
-  const synthScript = join(pkgRoot, 'scripts', 'synth-edge.mjs');
-  return {
-    id: 'edge',
-    async synthesize(text: string, outFile: string): Promise<{ path: string; ms: number }> {
-      const t0 = Date.now();
-      mkdirSync(dirname(outFile), { recursive: true });
-      const { code, stderr } = await runChild(process.execPath, [synthScript, text, outFile, voice(), '+0%']);
-      if (code !== 0 || !existsSync(outFile)) {
-        throw new Error('edge-tts synth failed (child exit=' + code + (stderr ? ', stderr=' + stderr.slice(0, 200) : '') + ')');
-      }
-      return { path: outFile, ms: Date.now() - t0 };
-    },
-    play(file: string): Promise<void> {
-      return new Promise((res) => {
-        const p = spawn('afplay', [file], { stdio: 'ignore' });
-        playingChild = p;
-        const done = () => { if (playingChild === p) playingChild = null; res(); };
-        p.on('close', done);
-        p.on('error', done);
-      });
-    },
-  };
+/** What the rest of the plugin needs from a speech backend, and nothing more:
+ *  synthesize a file, then play it. */
+interface SpeechEngine {
+  synthesize(text: string, outFile: string): Promise<{ path: string; ms: number }>;
+  play(file: string): Promise<void>;
 }
 
-/** Spawn a child with ELECTRON_RUN_AS_NODE=1 (plain Node, not Electron) and
- *  report its exit code + stderr. Used for edge-tts synth. */
+/** Built-in TTS. Both backends synthesize in a child process and are judged by
+ *  the output FILE, so a broken engine degrades to `failed` instead of taking
+ *  the host down with it, then play through the platform player (afplay on
+ *  macOS, WPF's MediaPlayer on Windows). No LLM. */
+function makeBuiltInTTS(entry: JarvisConfig): SpeechEngine {
+  return resolveTtsBackend(entry) === 'kokoro' ? makeKokoroTTS(entry) : makeEdgeTTS(entry);
+}
+
+/** Which backend actually speaks. An unset `ttsBackend` (the schema default is
+ *  now the empty string) selects the platform backend: Windows takes kokoro
+ *  because the edge-tts cloud path is verified broken there (the WebSocket
+ *  upgrade to speech.platform.bing.com is refused with 403, so no file is ever
+ *  produced) and local synthesis also removes the ISP dependency; macOS keeps
+ *  edge — nothing there is broken. An explicit value always wins, so `edge`
+ *  remains available on Windows. */
+function resolveTtsBackend(entry: JarvisConfig): string {
+  const configured = entry.ttsBackend.trim();
+  if (configured === 'kokoro' || configured === 'edge') return configured;
+  return onWindows ? 'kokoro' : 'edge';
+}
+
+/** Start a speech child. Keeping this the single spawn site is what makes the
+ *  ELECTRON_RUN_AS_NODE contract impossible to forget. */
+function spawnSynth(cmd: string, args: string[]): ChildProcess {
+  // ELECTRON_RUN_AS_NODE: plain Node, not Electron. edge-tts is 100% reliable in
+  // plain Node but flakes ~50% under Electron's network stack, and a Node synth
+  // script handed to the Electron binary would otherwise open a second window.
+  const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1' };
+  return spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], env });
+}
+
+/** Spawn a synth child and report its exit code + stderr tail. The caller
+ *  decides success from the output file, never from this alone. */
 function runChild(cmd: string, args: string[]): Promise<{ code: number; stderr: string }> {
   return new Promise((res, rej) => {
-    const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1' };
-    const p = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], env });
+    const p = spawnSynth(cmd, args);
     let stderr = '';
     p.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
     p.on('error', rej);
     p.on('close', (code) => res({ code: code ?? -1, stderr }));
   });
+}
+
+/** The one playback implementation for synthesized files. macOS hands the file
+ *  to `afplay`; Windows has no afplay, so PowerShell plays it through WPF's
+ *  MediaPlayer (PresentationCore ships with .NET Framework — nothing to
+ *  install). MediaPlayer decodes WAV exactly as it decodes MP3, so both
+ *  backends share this. Either child *is* the playback, so playingChild still
+ *  means "something is playing" and stopSpeech() can end it by killing the child. */
+function spawnSpeech(file: string): ChildProcess {
+  if (!onWindows) return spawn('afplay', [file], { stdio: 'ignore' });
+  // MediaPlayer decodes asynchronously without a dispatcher pump, so the script
+  // polls Position until the duration it reported has played. The two deadlines
+  // keep an undecodable file from pinning a live child (and playingChild)
+  // forever. The path sits in a single-quoted PowerShell string, so `'` doubles.
+  const script = [
+    "$ErrorActionPreference='Stop'",
+    'Add-Type -AssemblyName PresentationCore',
+    '$p=New-Object System.Windows.Media.MediaPlayer',
+    `$p.Open([uri]'${file.replace(/'/g, "''")}')`,
+    '$p.Play()',
+    '$give=(Get-Date).AddSeconds(15)',
+    'while(-not $p.NaturalDuration.HasTimeSpan -and (Get-Date) -lt $give){Start-Sleep -Milliseconds 50}',
+    'if(-not $p.NaturalDuration.HasTimeSpan){exit 1}',
+    '$end=(Get-Date).Add($p.NaturalDuration.TimeSpan).AddSeconds(5)',
+    'while($p.Position -lt $p.NaturalDuration.TimeSpan -and (Get-Date) -lt $end){Start-Sleep -Milliseconds 50}',
+    '$p.Stop();$p.Close()',
+  ].join(';');
+  // windowsHide: a console child of the GUI host would otherwise flash a window.
+  return spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script],
+    { stdio: 'ignore', windowsHide: true });
+}
+
+/** Playback shared by both backends: the child's lifetime IS the utterance. */
+function playSpeech(file: string): Promise<void> {
+  return new Promise((res) => {
+    const p = spawnSpeech(file);
+    playingChild = p;
+    const done = () => { if (playingChild === p) playingChild = null; res(); };
+    p.on('close', done);
+    p.on('error', done);
+  });
+}
+
+/** edge-tts (free Microsoft neural voices). Kept as the `edge` option and as
+ *  the macOS default; on Windows the WebSocket upgrade is refused with 403. */
+function makeEdgeTTS(entry: JarvisConfig): SpeechEngine {
+  const synthScript = join(pkgRoot, 'scripts', 'synth-edge.mjs');
+  return {
+    async synthesize(text: string, outFile: string): Promise<{ path: string; ms: number }> {
+      const t0 = Date.now();
+      mkdirSync(dirname(outFile), { recursive: true });
+      const { code, stderr } = await runChild(process.execPath, [synthScript, text, outFile, entry.edgeVoice, '+0%']);
+      if (code !== 0 || !existsSync(outFile)) {
+        throw new Error('edge-tts synth failed (child exit=' + code + (stderr ? ', stderr=' + stderr.slice(0, 200) : '') + ')');
+      }
+      return { path: outFile, ms: Date.now() - t0 };
+    },
+    play: playSpeech,
+  };
+}
+
+/** Local Kokoro on ONNX Runtime's CPU provider, driven by our own
+ *  scripts/kokoro_worker.py through scripts/synth-kokoro.mjs. Nothing leaves the
+ *  machine, so a cloud outage cannot silence Jarvis. */
+function makeKokoroTTS(entry: JarvisConfig): SpeechEngine {
+  const synthScript = join(pkgRoot, 'scripts', 'synth-kokoro.mjs');
+  const workerScript = join(pkgRoot, 'scripts', 'kokoro_worker.py');
+  return {
+    async synthesize(text: string, outFile: string): Promise<{ path: string; ms: number }> {
+      const t0 = Date.now();
+      mkdirSync(dirname(outFile), { recursive: true });
+      const { code, stderr } = await runChild(process.execPath, [
+        synthScript,
+        '--text', text,
+        '--out', outFile,
+        '--voice', entry.kokoroVoice,
+        '--threads', String(entry.kokoroThreads),
+        '--model-dir', resolveDir(entry.kokoroModelDir),
+        '--model-file', entry.kokoroModelFile,
+        '--voices-file', entry.kokoroVoicesFile,
+        '--python', entry.pythonPath,
+        '--worker', workerScript,
+      ]);
+      if (code !== 0 || !existsSync(outFile)) {
+        throw new Error('kokoro synth failed (child exit=' + code + (stderr ? ', stderr=' + stderr.slice(0, 200) : '') + ')');
+      }
+      return { path: outFile, ms: Date.now() - t0 };
+    },
+    play: playSpeech,
+  };
 }
 
 // ── HTTP helpers (copied from voice-mini pet.ts pattern) ─────────────
@@ -348,16 +522,91 @@ function writeRuntimeFile(entry: JarvisConfig, data: Record<string, unknown>): v
   } catch {}
 }
 
-/** Spawn the native悬浮窗 (macos/jarvis-panel) as a NON-DETACHED child of the
- *  host — i.e. the orb's lifecycle is tied to DSH Desktop ("和 DSH 作为依赖"):
- *  DSH up → orb up (host spawns it on webServer ready); DSH quits → orb dies
- *  with it; DSH restarts → host re-spawns. NON-detached is intentional: a
- *  detached child loses DSH's GUI/WindowServer session and the orb didn't
- *  render after restart; as a regular child it inherits the session and renders
- *  reliably (same as a manual `./jarvis-panel` launch). stdio ignored + unref'd
- *  so the host never blocks on it. The panel self-guards duplicates via pidfile. */
+/** Spawn the native panel (macos/jarvis-panel, or windows/dist/jarvis-panel.exe on
+ *  Windows) as a NON-DETACHED child of the host — i.e. the orb's lifecycle is
+ *  tied to DSH Desktop ("with DSH as a dependency"): DSH up → orb up (host spawns it on
+ *  webServer ready); DSH quits → orb dies with it; DSH restarts → host
+ *  re-spawns. NON-detached is intentional: on macOS a detached child loses
+ *  DSH's GUI/WindowServer session and the orb didn't render after restart; as a
+ *  regular child it inherits the session and renders reliably (same as a manual
+ *  `./jarvis-panel` launch). Windows keeps the same non-detached contract, where
+ *  the disposer's kill is what ends the orb. stdio ignored + unref'd so the host
+ *  never blocks on it. The panel self-guards duplicates via pidfile. */
 interface PanelProcess { start(): void; dispose(): void; }
 let panelOwner: PanelProcess | null = null;
+
+/** The subset of DSH's webServer service this plugin uses. */
+interface JarvisWebServer {
+  host?: string;
+  port?: number;
+  register(route: {
+    kind: 'prefix';
+    path: string;
+    handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>;
+  }): () => void;
+}
+
+/** Process-wide slot holding the live /jarvis route registration.
+ *
+ *  A plugin reload re-imports this module, so module-level state cannot be how
+ *  the next instance finds what the previous one registered — and DSH's
+ *  webServer treats a second registration of the same path as an ERROR rather
+ *  than a replacement, keeping the FIRST handler. That combination is what let
+ *  an initial load keep answering /jarvis/* from a closure whose Session had
+ *  already been detached, while every later apply looked like it had not been
+ *  loaded at all. A `Symbol.for` slot lives on the process, not the module. */
+const ROUTE_SLOT = Symbol.for('dsh-harness-jarvis:/jarvis-route');
+
+/** The slot table, typed once. */
+function routeSlot(): Record<symbol, unknown> {
+  return globalThis as unknown as Record<symbol, unknown>;
+}
+
+/** Release a route a previous module instance left registered. */
+function releasePreviousRoute(entry: JarvisConfig): void {
+  const slot = routeSlot();
+  const previous = slot[ROUTE_SLOT];
+  if (typeof previous !== 'function') return;
+  try {
+    (previous as () => void)();
+    debug(entry, 'released the previous /jarvis route registration');
+  } catch (error) {
+    debug(entry, 'releasing the previous /jarvis route failed: ' + (error instanceof Error ? error.message : String(error)));
+  }
+  delete slot[ROUTE_SLOT];
+}
+
+/** Claim the /jarvis prefix, reclaiming a registration whose owner is gone.
+ *
+ *  DSH models a route as an exclusive seat: `register` throws on a duplicate
+ *  (kind, path) and otherwise keeps the incumbent. An entry left by an apply
+ *  from before this fix — or by a reload that died mid-teardown — has no live
+ *  owner and can never serve a correct request again, so the seat is reclaimed.
+ *  The route table is private, so a renamed or missing field simply rethrows. */
+function registerJarvisRoute(
+  webServer: JarvisWebServer,
+  entry: JarvisConfig,
+  handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>,
+): () => void {
+  const claim = (): (() => void) => webServer.register({ kind: 'prefix', path: '/jarvis', handler });
+  let dispose: () => void;
+  try {
+    dispose = claim();
+  } catch (error) {
+    const table = (webServer as { prefixes?: Map<string, unknown> }).prefixes;
+    if (!(table instanceof Map) || !table.delete('/jarvis')) throw error;
+    debug(entry, 'reclaimed a stale /jarvis route: ' + (error instanceof Error ? error.message : String(error)));
+    dispose = claim();
+  }
+  routeSlot()[ROUTE_SLOT] = dispose;
+  return dispose;
+}
+
+/** The panel build for this platform: a bare Swift executable on macOS, the
+ *  panel agent's windows/dist/jarvis-panel.exe on Windows. */
+function panelBinary(root: string): string {
+  return onWindows ? join(root, 'windows', 'dist', 'jarvis-panel.exe') : join(root, 'macos', 'jarvis-panel');
+}
 
 /** Each apply owns its process and timer. Replacing an owner permanently
  *  disposes it before SIGTERM, so late events cannot affect the new owner. */
@@ -373,7 +622,7 @@ function createPanelProcess(entry: JarvisConfig, say: JarvisDeps['say']): PanelP
     if (decision.action === 'stay-down') {
       debug(entry, 'panel stopped: ' + decision.reason);
       if (decision.reason === 'crash-limit') {
-        void say('悬浮窗反复崩溃，已停止自动重启').catch(e => {
+        void say('The panel kept crashing, so automatic restarts have stopped').catch(e => {
           debug(entry, 'panel crash notification failed: ' + String(e));
         });
       }
@@ -389,10 +638,11 @@ function createPanelProcess(entry: JarvisConfig, say: JarvisDeps['say']): PanelP
 
   const spawnPanel = (): void => {
     if (disposed) return;
-    const bin = join(pkgRoot, 'macos', 'jarvis-panel');
-    if (!existsSync(bin)) { debug(entry, 'panel binary not found (' + bin + ') — skipping spawn (build macos/ first)'); return; }
+    const bin = panelBinary(pkgRoot);
+    if (!existsSync(bin)) { debug(entry, 'panel binary not found (' + bin + ') — skipping spawn (build ' + (onWindows ? 'windows/' : 'macos/') + ' first)'); return; }
     try {
-      const child = spawn(bin, [], { stdio: 'ignore' });
+      // windowsHide only hides a console window; a GUI panel still shows itself.
+      const child = spawn(bin, [], onWindows ? { stdio: 'ignore', windowsHide: true } : { stdio: 'ignore' });
       panelChild = child;
       child.on('spawn', () => {
         if (!disposed && panelChild === child) supervisor.markStarted();
@@ -409,7 +659,7 @@ function createPanelProcess(entry: JarvisConfig, say: JarvisDeps['say']): PanelP
         finish(-1, null);
       });
       child.unref();
-      debug(entry, 'spawned悬浮窗 panel (pid=' + child.pid + ', non-detached, bin=' + bin + ')');
+      debug(entry, 'spawned panel (pid=' + child.pid + ', non-detached, bin=' + bin + ')');
     } catch (e) {
       debug(entry, 'panel spawn failed: ' + (e instanceof Error ? e.message : String(e)));
       onExit(-1, null);
@@ -430,10 +680,57 @@ function createPanelProcess(entry: JarvisConfig, say: JarvisDeps['say']): PanelP
       const child = panelChild;
       panelChild = null;
       if (child && !child.killed) {
-        try { child.kill('SIGTERM'); debug(entry, 'killed悬浮窗 panel (pid=' + child.pid + ')'); } catch {}
+        try { child.kill('SIGTERM'); debug(entry, 'killed panel (pid=' + child.pid + ')'); } catch {}
       }
     },
   };
+}
+
+/** Raise the running DSH Desktop window on Windows, where neither `open` nor an
+ *  app bundle exists. DSH's Electron processes all share one exe path, so prefer
+ *  our own pid (the host may be the windowed main process) and otherwise take
+ *  whichever process on that path owns a main window. Best-effort and never
+ *  awaited — /open stays fire-and-forget. Focus-stealing rules make a bare
+ *  SetForegroundWindow unreliable, so the script joins the foreground thread's
+ *  input queue for that one call. */
+function raiseDshWindow(entry: JarvisConfig): void {
+  // One-line C#: -Command receives the script as a single argument, and a
+  // here-string would depend on newline quoting surviving that trip.
+  const types = 'using System;using System.Runtime.InteropServices;public class JarvisWin{'
+    + '[DllImport("user32.dll")]public static extern bool SetForegroundWindow(IntPtr h);'
+    + '[DllImport("user32.dll")]public static extern bool ShowWindowAsync(IntPtr h,int c);'
+    + '[DllImport("user32.dll")]public static extern bool IsIconic(IntPtr h);'
+    + '[DllImport("user32.dll")]public static extern IntPtr GetForegroundWindow();'
+    + '[DllImport("user32.dll")]public static extern uint GetWindowThreadProcessId(IntPtr h,out uint p);'
+    + '[DllImport("user32.dll")]public static extern bool AttachThreadInput(uint a,uint b,bool f);'
+    + '[DllImport("kernel32.dll")]public static extern uint GetCurrentThreadId();}';
+  const script = [
+    `$exe='${process.execPath.replace(/'/g, "''")}'`,
+    `Add-Type -TypeDefinition '${types}'`,
+    `$p=Get-Process -Id ${String(process.pid)} -ErrorAction SilentlyContinue`,
+    // A windowless Electron child cannot be raised; the browser process with the
+    // same exe path is where the window lives.
+    'if(-not $p -or $p.MainWindowHandle -eq 0){$p=Get-Process -ErrorAction SilentlyContinue|Where-Object{try{$_.Path -eq $exe}catch{$false}}|Where-Object{$_.MainWindowHandle -ne 0}|Select-Object -First 1}',
+    'if(-not $p -or $p.MainWindowHandle -eq 0){exit 1}',
+    '$h=$p.MainWindowHandle',
+    // Restore first: SetForegroundWindow leaves a minimized window minimized.
+    'if([JarvisWin]::IsIconic($h)){[void][JarvisWin]::ShowWindowAsync($h,9)}',
+    '$fgPid=0',
+    '$fg=[JarvisWin]::GetWindowThreadProcessId([JarvisWin]::GetForegroundWindow(),[ref]$fgPid)',
+    '$mine=[JarvisWin]::GetCurrentThreadId()',
+    'if($fg -ne 0 -and $fg -ne $mine){[void][JarvisWin]::AttachThreadInput($mine,$fg,$true)}',
+    '[void][JarvisWin]::SetForegroundWindow($h)',
+    'if($fg -ne 0 -and $fg -ne $mine){[void][JarvisWin]::AttachThreadInput($mine,$fg,$false)}',
+  ].join(';');
+  try {
+    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script],
+      { stdio: 'ignore', windowsHide: true });
+    child.on('error', error => debug(entry, 'raise DSH window failed: ' + error.message));
+    child.unref();
+    debug(entry, 'raising DSH window (pid=' + child.pid + ')');
+  } catch (e) {
+    debug(entry, 'raise DSH window failed: ' + (e instanceof Error ? e.message : String(e)));
+  }
 }
 
 export function apply(ctx: Context, rawConfig: unknown): (() => void) | void {
@@ -520,7 +817,7 @@ export function apply(ctx: Context, rawConfig: unknown): (() => void) | void {
         const agent = exec?.agent ?? jarvisHandle?.agent;
         const answer = await uq.ask({
           questions: [{
-            id: 'q1', question, header: '贾维斯',
+            id: 'q1', question, header: 'Jarvis',
             ...(choices.length > 0 ? { options: choices.map((label) => ({ label })) } : {}),
           }],
           ...(agent ? { agent } : {}),
@@ -528,7 +825,7 @@ export function apply(ctx: Context, rawConfig: unknown): (() => void) | void {
         });
         const first = answer?.answers?.[0];
         const picked = [...(first?.selected ?? []), ...(first?.custom ? [first.custom] : [])];
-        return picked.join('；');
+        return picked.join('; ');
       };
       return await output.ask(() => continuation
         ? completion.askContinuation(continuation.session, continuation.task, ask) : ask(),
@@ -574,7 +871,7 @@ export function apply(ctx: Context, rawConfig: unknown): (() => void) | void {
       return output.announce(context?.session ?? '', text, {
         title: context?.title,
         // The continuation-limit warning must never become a successful completion summary.
-        immediate: !context || context.reason !== 'completed' || text.startsWith(`${context.title}还没做完：`),
+        immediate: !context || context.reason !== 'completed' || text.startsWith(`${context.title} isn't done yet: `),
       });
     },
     notify: text => {
@@ -582,7 +879,7 @@ export function apply(ctx: Context, rawConfig: unknown): (() => void) | void {
       const notice: UserMessage = {
         id: MessageId(`jarvis-judge-${Date.now().toString(36)}-${randomBytes(4).toString('hex')}`),
         role: 'user', content: [{ type: 'text', text }],
-        source: { kind: 'plugin', plugin: 'dsh-harness-jarvis', form: 'notice', summary: 'task needs continuation decision' },
+        source: { kind: 'user' },
       };
       if (!deliver(agent, notice)) throw new Error('completion: Jarvis accepts no messages');
     },
@@ -599,10 +896,10 @@ export function apply(ctx: Context, rawConfig: unknown): (() => void) | void {
     llm = (llmCtx as any).get('llm');
     ctx.logger?.warn?.('dsh-harness-jarvis: llm attached');
   });
+  // Filled once webServer injects; the disposer below releases it.
+  let disposeRoute: (() => void) | null = null;
   ctx.inject(['webServer' as any], (serverCtx: Context) => {
-    const webServer = (serverCtx as any).get('webServer') as
-      | { host?: string; port?: number; register: (r: { kind: 'prefix'; path: string; handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void> }) => () => void }
-      | undefined;
+    const webServer = (serverCtx as any).get('webServer') as JarvisWebServer | undefined;
     if (!webServer) { debug(entry, 'webServer not found'); return; }
     const token = loadOrCreateToken(entry);
     const origin = `http://${webServer.host ?? '127.0.0.1'}:${String(webServer.port ?? '')}`;
@@ -616,12 +913,17 @@ export function apply(ctx: Context, rawConfig: unknown): (() => void) | void {
     writeRt();
     ctx.inject(['desktopBrowserAccess' as any], () => writeRt());
     panel.start();
-    webServer.register({
-      kind: 'prefix', path: '/jarvis',
-      handler: async (req: IncomingMessage, res: ServerResponse) => {
-        if (!isLoopbackReq(req) || !isAuthorized(req, token)) { sendJson(res, 403, { error: 'forbidden' }); return; }
-        const url = (req.url ?? '').replace(/^\/jarvis/, '').split('?')[0] ?? '/';
-        try {
+    // Registration is a duplicate-path ERROR in DSH, not a replacement, and the
+    // handler closes over this apply's token, live state and jarvisHandle. A
+    // registration left behind therefore both blocks this apply and, while it
+    // still serves, answers /jarvis/* from a torn-down closure — the exact
+    // failure that made every reload look like it had not re-imported the
+    // module. Release the previous owner first, then claim the path.
+    releasePreviousRoute(entry);
+    disposeRoute = registerJarvisRoute(webServer, entry, async (req: IncomingMessage, res: ServerResponse) => {
+      if (!isLoopbackReq(req) || !isAuthorized(req, token)) { sendJson(res, 403, { error: 'forbidden' }); return; }
+      const url = (req.url ?? '').replace(/^\/jarvis/, '').split('?')[0] ?? '/';
+      try {
           if (url === '/state' && req.method === 'GET') {
             const narration = await voiceMiniQueue(webOrigin);
             const speech = live.speech();
@@ -700,10 +1002,15 @@ export function apply(ctx: Context, rawConfig: unknown): (() => void) | void {
             res.statusCode = 204; res.end(); return;
           }
           if (url === '/open' && req.method === 'POST') {
-            // The host runs inside DSH, so its own .app bundle is the one to raise (covers Beta builds).
-            const app = /^(.*?\.app)\//.exec(process.execPath)?.[1];
-            const args = app ? [app] : ['-b', 'ai.deepseek.dsh.desktop'];
-            try { spawn('open', args, { stdio: 'ignore' }).on('error', () => {}); } catch {}
+            if (onWindows) {
+              // Windows has no app bundle to hand to `open`; activate the DSH window itself.
+              raiseDshWindow(entry);
+            } else {
+              // The host runs inside DSH, so its own .app bundle is the one to raise (covers Beta builds).
+              const app = /^(.*?\.app)\//.exec(process.execPath)?.[1];
+              const args = app ? [app] : ['-b', 'ai.deepseek.dsh.desktop'];
+              try { spawn('open', args, { stdio: 'ignore' }).on('error', () => {}); } catch {}
+            }
             res.statusCode = 204; res.end(); return;
           }
           if (url === '/providers' && req.method === 'GET') {
@@ -813,7 +1120,7 @@ export function apply(ctx: Context, rawConfig: unknown): (() => void) | void {
           if (url === '/input' && req.method === 'POST') {
             // Inject the user's text into the Jarvis agent → triggers a turn.
             // If a target session is provided, format the message so Jarvis knows
-            // to inject into that session (the user picks the session in the悬浮窗
+            // to inject into that session (the user picks the session in the panel
             // picker — no need to type UUIDs).
             const body = JSON.parse((await readBody(req)) || '{}');
             const text = typeof body.text === 'string' ? body.text.trim() : '';
@@ -827,29 +1134,37 @@ export function apply(ctx: Context, rawConfig: unknown): (() => void) | void {
               id: MessageId(`jarvis-input-${Date.now().toString(36)}`),
               role: 'user',
               content: [{ type: 'text', text: jarvisText }],
-              source: { kind: 'plugin', plugin: 'dsh-harness-jarvis', form: 'notice', summary: session ? 'user input → inject' : 'user input' },
+              source: { kind: 'user' },
             };
             const agent = jarvisHandle?.agent ?? jarvisHandle;
             live.userSent();
-            if (typeof agent?.followup === 'function') {
-              agent.followup(msg);
-              if (session) { completion.invalidate(session); ledger.expect(session, body.text); }
-              debug(entry, '/jarvis/input: followup() — "' + text.slice(0, 60) + '"' + (session ? ' → ' + session : ''));
-              sendJson(res, 200, { ok: true });
-            } else if (typeof agent?.inject === 'function') {
-              agent.inject(msg);
-              if (session) { completion.invalidate(session); ledger.expect(session, body.text); }
-              debug(entry, '/jarvis/input: inject() — "' + text.slice(0, 60) + '"');
-              sendJson(res, 200, { ok: true });
-            } else {
-              sendJson(res, 500, { error: 'no followup/inject on jarvis handle' });
+            try {
+              if (typeof agent?.followup === 'function') {
+                agent.followup(msg);
+                if (session) { completion.invalidate(session); ledger.expect(session, body.text); }
+                debug(entry, '/jarvis/input: followup() — "' + text.slice(0, 60) + '"' + (session ? ' → ' + session : ''));
+                sendJson(res, 200, { ok: true });
+              } else if (typeof agent?.inject === 'function') {
+                agent.inject(msg);
+                if (session) { completion.invalidate(session); ledger.expect(session, body.text); }
+                debug(entry, '/jarvis/input: inject() — "' + text.slice(0, 60) + '"');
+                sendJson(res, 200, { ok: true });
+              } else {
+                sendJson(res, 500, { error: 'no followup/inject on jarvis handle' });
+              }
+            } catch (e) {
+              // Without this per-branch catch the rejection would leave the
+              // response head-only; the panel reads that as a bare status code
+              // with no body, which is undebuggable from the outside.
+              const reason = e instanceof Error ? e.message : String(e);
+              debug(entry, '/jarvis/input: delivery failed — ' + reason);
+              sendJson(res, 500, { error: reason });
             }
             return;
           }
           sendJson(res, 404, { error: 'not found', url });
         } catch (e) { sendJson(res, 500, { error: e instanceof Error ? e.message : String(e) }); }
-      },
-    });
+      });
     debug(entry, 'webServer routes mounted at /jarvis');
   });
   const settingsBase = mergeSettings(entry, {});
@@ -887,29 +1202,36 @@ export function apply(ctx: Context, rawConfig: unknown): (() => void) | void {
   const setJarvisTitle = () => {
     if (!jarvisReady || !titleService || titleAttempted) return;
     titleAttempted = true;
-    void trySetTitle(ctx, titleService, entry, '贾维斯');
+    void trySetTitle(ctx, titleService, entry, 'Jarvis');
   };
   ctx.inject(['sessionTitle' as any], (tsCtx: Context) => {
     titleService = (tsCtx as any).get('sessionTitle');
     setJarvisTitle();
   });
 
-  // ── 挂点2: create Jarvis agent with setup callback ────────────────────
+  // ── Hook 2: create Jarvis agent with setup callback ──────────────────
   // The plugin creates the agent itself (not relying on cordis.yml config
-  // or GUI naming). The setup callback registers persona + tools (挂点2)
+  // or GUI naming). The setup callback registers persona + tools (hook 2)
   // through agentCtx before the agent is published.
-  ctx.inject(['agentLoop' as any], (loopCtx: Context) => {
-    debug(entry, 'agentLoop inject callback FIRED');
-    const loop = (loopCtx as any).get('agentLoop') as
-      | { createAgent: (ownerCtx: Context, opts: any) => Promise<any>; resume: (ownerCtx: Context, opts: any) => Promise<any> }
-      | undefined;
+  //
+  // Creation goes through the `agents` registry, NOT through
+  // agentLoop.createAgent(ctx, …): since DSH 0.2.x every agent is owned by the
+  // context whose effect mints it (agent-loop `initializeAgent`), and
+  // service-owned creation is traced through the agents service's own context.
+  // Passing this loader entry's context made the session die with the plugin —
+  // the next apply() then held a Session that had been detached from its
+  // SessionStore, and every append failed with
+  // `session "jarvis" cannot append outside a SessionStore`.
+  ctx.inject(['agents' as any], (agentsCtx: Context) => {
+    debug(entry, 'agents inject callback FIRED');
+    const agents = (agentsCtx as any).get('agents') as AgentsService | undefined;
     // Resolve the auto model: empty provider → first llm adapter, empty model
     // → that provider's first entry. The result is written back into entry so
     // the judge fallback, /config route, and settings pinning all see the
     // concrete values the live agent actually uses. The llm service is read
     // from this context or the earlier llm inject, whichever is available.
     try {
-      const svc = ((loopCtx as any).get('llm') ?? llm) as any;
+      const svc = ((agentsCtx as any).get('llm') ?? llm) as any;
       if ((!entry.provider.trim() || !entry.model.trim()) && svc) {
         const adapters = svc.adapters;
         const keys = adapters instanceof Map ? [...adapters.keys()].map(String) : [];
@@ -922,53 +1244,37 @@ export function apply(ctx: Context, rawConfig: unknown): (() => void) | void {
         debug(entry, 'agent model auto-resolved: provider=' + entry.provider + ' model=' + entry.model);
       }
     } catch (e) { debug(entry, 'agent model auto-resolve failed: ' + (e instanceof Error ? e.message : String(e))); }
-    if (!loop) {
-      debug(entry, 'agentLoop service NOT found (get returned undefined)');
-      ctx.logger?.warn?.('dsh-harness-jarvis: agentLoop not found');
+    if (!agents || typeof agents.create !== 'function') {
+      debug(entry, 'agents service NOT found (get returned undefined)');
+      ctx.logger?.warn?.('dsh-harness-jarvis: agents service not found');
       return;
     }
     agentModelSelected = true;
-    debug(entry, 'agentLoop service found, calling createAgent');
-    loop.createAgent(ctx, {
-      sessionId: entry.jarvisSessionId,
-      meta: { cwd: resolveDir(entry.jarvisCwd), agentPreset: 'jarvis' },
-      agentOptions: { provider: entry.provider, model: entry.model },
-      setup: (agentCtx: Context) => {
-        debug(entry, 'setup callback FIRED — decorating Jarvis agent');
-        decorateJarvisAgent(agentCtx, entry, deps);
-      },
-    }).then((handle: any) => {
-      jarvisHandle = handle;
+    // Setup recomposes the Jarvis world on every mount. The Agent parameter is
+    // the 0.2.x second argument; decoration never needs it, but taking only the
+    // first would silently mis-bind if a future release reorders them.
+    const setup = (agentCtx: Context, agent: unknown): void => {
+      debug(entry, 'setup callback FIRED — decorating Jarvis agent');
+      void agent;
+      decorateJarvisAgent(agentCtx, entry, deps);
+    };
+    debug(entry, 'agents service found, resolving Jarvis agent');
+    void settleJarvisAgent(agents, agentsCtx, entry, setup).then((settled) => {
+      jarvisHandle = settled.handle;
       jarvisReady = true;
       setJarvisTitle();
-      debug(entry, 'createAgent SUCCESS — Jarvis agent created + decorated (first-install)');
-      ctx.logger?.warn?.('dsh-harness-jarvis: Jarvis agent created + decorated');
-      kickstartJarvis(handle, entry);
+      debug(entry, 'Jarvis agent ready (' + (settled.existed ? 'resumed' : 'created') + ')');
+      ctx.logger?.warn?.('dsh-harness-jarvis: Jarvis agent ready (' + (settled.existed ? 'resumed' : 'created') + ')');
+      // First install: the session did not exist, so one LLM turn brings it to
+      // life. Restart: existing history, so only the spoken greeting.
+      if (settled.existed) void speakGreeting(builtInTts, entry, live);
+      else kickstartJarvis(settled.handle, entry);
     }).catch((err: unknown) => {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      debug(entry, 'createAgent failed: ' + errMsg + ' — trying resume');
-      if (errMsg.includes('already exists') && loop.resume) {
-        loop.resume(ctx, {
-          resumeSessionId: entry.jarvisSessionId,
-          agentOptions: { provider: entry.provider, model: entry.model },
-          setup: (agentCtx: Context) => {
-            debug(entry, 'resume setup callback FIRED — decorating');
-            decorateJarvisAgent(agentCtx, entry, deps);
-          },
-        }).then((handle: any) => {
-          jarvisHandle = handle;
-          jarvisReady = true;
-          setJarvisTitle();
-          debug(entry, 'resume SUCCESS — Jarvis agent resumed + decorated (restart)');
-          void speakGreeting(builtInTts, entry, live);
-        }).catch((err2: unknown) => {
-          debug(entry, 'resume ALSO failed: ' + (err2 instanceof Error ? err2.message : String(err2)));
-        });
-      }
+      debug(entry, 'Jarvis agent setup failed: ' + (err instanceof Error ? err.message : String(err)));
     });
   });
 
-  // ── 挂点1: global listeners (worker events, filtered to managed) ──────
+  // ── Hook 1: global listeners (worker events, filtered to managed) ────
   ctx.on('session/event' as any, (session: { id?: string } | undefined, event: { type?: string; data?: any }) => {
     const sid = typeof session?.id === 'string' ? session.id : undefined;
     if (sid && (sid === entry.jarvisSessionId || managed.has(sid))) {
@@ -999,7 +1305,7 @@ export function apply(ctx: Context, rawConfig: unknown): (() => void) | void {
     }
   });
 
-  // ── approvals / questions relayed to the悬浮窗 (§11) ──────────────────
+  // ── approvals / questions relayed to the panel (§11) ─────────────────
   // Prepended so the panel races the DSH window; whichever answers first wins.
   ctx.on('approval/request' as any, (req: any, next: () => Promise<any>) => {
     let snapshot: Omit<ApprovalRecord, 'ts' | 'decision'> | undefined;
@@ -1032,7 +1338,7 @@ export function apply(ctx: Context, rawConfig: unknown): (() => void) | void {
         session: { id: sid, cwd: typeof cwd === 'string' ? cwd : '', managed: managed.has(sid) },
         operation: { tool: req.toolName, ...rawOperation },
         context: Array.from(context).slice(0, 300).join(''),
-        tier: { value: '', notes: 'Phase1:未分级' },
+        tier: { value: '', notes: 'Phase1: untiered' },
       };
     } catch (error) { metadataError = error; }
     const current = (): boolean => {
@@ -1082,7 +1388,7 @@ export function apply(ctx: Context, rawConfig: unknown): (() => void) | void {
         try {
           if (!snapshot) { onError(metadataError); return; }
           void writeApproval(memory, {
-            ...snapshot, ts, ...(mode === 'off' ? {} : {tier:{value:result.tier,notes:automatic?'自动批准':'转用户审批'}}),
+            ...snapshot, ts, ...(mode === 'off' ? {} : {tier:{value:result.tier,notes:automatic?'Auto-approved':'Sent to the user for approval'}}),
             decision: { allow: outcome === 'allowed-once', source: automatic ? 'jarvis' : 'user', reason: automatic ? result.reason : '' },
           }, onError);
           if (automatic && result.tier !== 'high') {
@@ -1091,7 +1397,7 @@ export function apply(ctx: Context, rawConfig: unknown): (() => void) | void {
               tier:result.tier,...(result.rule?{rule:result.rule}:{}) });
             live.touch();
             if (result.tier === 'grey' && !settingsDisposed) {
-              void deps.say(`替 ${title} 批准了 ${Array.from(snapshot.operation.command).slice(0,80).join('')}`).catch(onError);
+              void deps.say(`Approved for ${title}: ${Array.from(snapshot.operation.command).slice(0,80).join('')}`).catch(onError);
             }
           }
         } catch (error) { try { onError(error); } catch {} }
@@ -1118,7 +1424,7 @@ export function apply(ctx: Context, rawConfig: unknown): (() => void) | void {
         }).catch(onError);
         void (async () => {
           const title = (await sessionRows()).find(row => row.id === answer.session)?.title || answer.session;
-          await deps.say(`${title}问了${answer.question.question}，我替你选了${answer.choice}`);
+          await deps.say(`${title} asked "${answer.question.question}", so I chose ${answer.choice} for you`);
         })().catch(onError);
       });
     },
@@ -1128,7 +1434,7 @@ export function apply(ctx: Context, rawConfig: unknown): (() => void) | void {
     { prepend: true } as any);
 
   // ── built-in TTS + voice:tts detect (§5) ─────────────────────────────
-  const builtInTts = makeBuiltInTTS(() => entry.edgeVoice);
+  const builtInTts = makeBuiltInTTS(entry);
   ctx.inject(['voice:tts' as any], () => {
     ctx.logger?.warn?.('dsh-harness-jarvis: external voice:tts detected');
   });
@@ -1136,8 +1442,8 @@ export function apply(ctx: Context, rawConfig: unknown): (() => void) | void {
   void llm; void builtInTts;
 
   // Cordis convention: apply() returns a disposer that runs when this plugin
-  // context is torn down (DSH quits / plugin unloads) — kill the悬浮窗 panel
-  // so the orb's lifecycle stays tied to DSH ("和 DSH 作为依赖").
+  // context is torn down (DSH quits / plugin unloads) — kill the panel
+  // so the orb's lifecycle stays tied to DSH ("with DSH as a dependency").
   return () => {
     settingsDisposed = true;
     clearInterval(pruneTasks);
@@ -1146,14 +1452,25 @@ export function apply(ctx: Context, rawConfig: unknown): (() => void) | void {
     askInterceptor.dispose();
     autoApproval.dispose();
     output.dispose();
+    // Unregister this apply's route so the next reload can claim the path, and
+    // clear the process slot only while it still names this registration — a
+    // later apply may already own it.
+    if (disposeRoute) {
+      const slot = routeSlot();
+      if (slot[ROUTE_SLOT] === disposeRoute) delete slot[ROUTE_SLOT];
+      disposeRoute();
+      disposeRoute = null;
+    }
     panel.dispose();
     if (panelOwner === panel) panelOwner = null;
   };
 }
 
-/** Built-in restart welcome greetings per locale. */
-function builtinGreetings(locale: string): string[] {
-  return locale === 'en' ? ['Welcome back!', 'Welcome!'] : ['欢迎回来。', '欢迎回归。'];
+/** Built-in restart welcome greetings. This deployment ships English wording
+ *  for every locale; a user who wants another language adds entries through the
+ *  `greetings` setting, which is appended to this list. */
+function builtinGreetings(_locale: string): string[] {
+  return ['Welcome back!', 'Welcome!'];
 }
 
 /** Pick a random restart welcome greeting from (built-ins ∪ user-configured
@@ -1170,19 +1487,20 @@ function pickGreeting(entry: JarvisConfig): string {
 
 /**
  * First-install kickstart: the jarvis session did NOT exist, so we make the
- * 首次 LLM 访问 to bring the session to life (createAgent created the object;
+ * first LLM call to bring the session to life (createAgent created the object;
  * the turn persists/finalises it). The LLM turn's reply is spoken by voice-mini
  * (when linked + narrating jarvis turns). NO fixed welcome greeting here — the
  * welcome greeting is for the restart path (session already exists).
- * (§: session 不存在 → 大模型调用让 session 成功创建) */
+ * (§: session absent → a model call makes the session get created) */
 function kickstartJarvis(handle: any, entry: JarvisConfig): void {
   try {
-    const init = entry.locale === 'en' ? 'Hello' : '你好';
+    // This deployment ships English wording for every locale.
+    const init = 'Hello';
     const msg: UserMessage = {
       id: MessageId(`jarvis-init-${Date.now().toString(36)}`),
       role: 'user',
       content: [{ type: 'text', text: init }],
-      source: { kind: 'plugin', plugin: 'dsh-harness-jarvis', form: 'notice', summary: 'first-install-init' },
+      source: { kind: 'user' },
     };
     const agent = handle?.agent ?? handle;
     if (typeof agent?.followup === 'function') {
@@ -1202,8 +1520,8 @@ function kickstartJarvis(handle: any, entry: JarvisConfig): void {
 /**
  * Restart welcome greeting (session already existed → NO LLM). Picks a random
  * greeting from the list and speaks it via voice-mini /test (chime+TTS, the
- * "完整体": jarvis+voice-mini); falls back to built-in edge-tts if voice-mini is
- * absent. NO text written into the session (§: session 存在 → 欢迎语，随机选，不跑LLM).
+ * "full stack": jarvis+voice-mini); falls back to built-in edge-tts if voice-mini is
+ * absent. NO text written into the session (§: session exists → greeting, random pick, no LLM).
  */
 async function speakGreeting(
   tts: { synthesize: (text: string, outFile: string) => Promise<unknown>; play: (file: string) => unknown },
@@ -1215,7 +1533,7 @@ async function speakGreeting(
 }
 
 /** Jarvis's own voice (greetings, say_to_user): voice-mini /test with the
- *  Jarvis chime when present, otherwise the built-in edge-tts (cached per text). */
+ *  Jarvis chime when present, otherwise the built-in backend (cached per text). */
 async function speakAsJarvis(
   tts: { synthesize: (text: string, outFile: string) => Promise<unknown>; play: (file: string) => unknown },
   entry: JarvisConfig,
@@ -1225,8 +1543,14 @@ async function speakAsJarvis(
   if (voiceMuted) return 'muted';
   if (webOrigin && await speakViaVoiceMini(webOrigin, text, entry)) return 'voice-mini';
   try {
-    const hash = createHash('sha1').update(entry.edgeVoice + '\0' + text).digest('hex').slice(0, 16);
-    const outFile = join(resolveDir(entry.audioDir), `say-${hash}.mp3`);
+    // The voice and the backend both belong in the cache key: the same words in
+    // another voice — or from a backend that writes another format — are
+    // different audio, and reusing the wrong file would be audible.
+    const backend = resolveTtsBackend(entry);
+    const key = backend === 'kokoro' ? entry.kokoroVoice : entry.edgeVoice;
+    const extension = backend === 'kokoro' ? 'wav' : 'mp3';
+    const hash = createHash('sha1').update(backend + '\0' + key + '\0' + text).digest('hex').slice(0, 16);
+    const outFile = join(resolveDir(entry.audioDir), `say-${hash}.${extension}`);
     if (!existsSync(outFile)) await tts.synthesize(text, outFile);
     const id = `built-in-${randomUUID()}`;
     live.speechSignal({ phase: 'start', id, source: 'jarvis', text });
@@ -1372,7 +1696,62 @@ async function trySetTitle(ctx: Context, titleService: any, entry: JarvisConfig,
   }
 }
 
-// ── 挂点2: decorate Jarvis agent (via agentCtx from setup callback) ────
+/** Resolve the Jarvis agent for one apply, reusing what is already live.
+ *
+ *  A live agent must be REUSED rather than replaced: agents created through the
+ *  `agents` registry outlive this plugin context, so after a plugin reload the
+ *  same session is still registered and attached. Creating or resuming over it
+ *  would collide, and dropping the old handle would leave its session detached
+ *  from the SessionStore — the state in which every append fails. A session
+ *  that is stored but not live is resumed; anything else is created fresh. */
+async function settleJarvisAgent(
+  agents: AgentsService,
+  agentsCtx: Context,
+  entry: JarvisConfig,
+  setup: (agentCtx: Context, agent: unknown) => void,
+): Promise<SettledJarvis> {
+  const live = agents.get(entry.jarvisSessionId);
+  if (live) {
+    debug(entry, 'Jarvis agent already live — reusing it');
+    return { handle: { agent: live }, existed: true };
+  }
+  const sessions = (agentsCtx as any).get?.('sessions') as SessionStoreService | undefined;
+  const stored = (() => { try { return sessions?.get?.(entry.jarvisSessionId) !== undefined; } catch { return false; } })();
+  if (stored) return { handle: await resumeJarvis(agents, entry, setup), existed: true };
+  try {
+    return {
+      handle: await agents.create({
+        sessionId: entry.jarvisSessionId,
+        // agentPreset is the session's creation record; the composition itself is
+        // mounted by whichever preset row carries the id.
+        meta: { cwd: resolveDir(entry.jarvisCwd), agentPreset: 'jarvis' },
+        agentOptions: agentOptions(entry),
+        setup,
+      }),
+      existed: false,
+    };
+  } catch (error) {
+    // A failed creation may still have left a stored Session (setup events are
+    // persisted before publication), and its identity is then unavailable for a
+    // new creation. Only a stored-history collision earns the resume retry;
+    // every other failure is reported as itself.
+    if (!/already exists|already attached/.test(error instanceof Error ? error.message : String(error))) throw error;
+    debug(entry, 'create collided with a stored session — resuming instead');
+    return { handle: await resumeJarvis(agents, entry, setup), existed: true };
+  }
+}
+
+/** Resume one stored Jarvis session through the agents registry. */
+function resumeJarvis(
+  agents: AgentsService,
+  entry: JarvisConfig,
+  setup: (agentCtx: Context, agent: unknown) => void,
+): Promise<{ agent: any }> {
+  if (typeof agents.resume !== 'function') throw new Error('agents service offers no resume');
+  return agents.resume({ resumeSessionId: entry.jarvisSessionId, agentOptions: agentOptions(entry), setup });
+}
+
+// ── Hook 2: decorate Jarvis agent (via agentCtx from setup callback) ───
 function decorateJarvisAgent(agentCtx: Context, entry: JarvisConfig, deps: JarvisDeps): void {
   debug(entry, 'decorateJarvisAgent started');
   // Use agentCtx.inject (not ctx.inject) so section registers on AGENT scope
@@ -1417,8 +1796,8 @@ const textOutput = {
 
 /** Human-readable session line for the model: title, workspace, status, id. */
 function describeSession(s: SessionRow): string {
-  const name = s.title || '(无标题)';
-  const narration = s.narration ? ` · 播报=${s.narration === 'self' ? '自己汇报' : '贾维斯转述'}` : '';
+  const name = s.title || '(untitled)';
+  const narration = s.narration ? ` · announce=${s.narration === 'self' ? 'self-report' : 'Jarvis relays'}` : '';
   return `- ${name}${s.workspace ? ` [${s.workspace}]` : ''} · ${s.status}${narration} · id=${s.id}`;
 }
 
@@ -1431,22 +1810,22 @@ function registerJarvisTools(agentCtx: Context, entry: JarvisConfig, deps: Jarvi
 
   tools.register(defineTool({
     name: 'list_approval_rules',
-    description: '列出用户在审批卡片创建的未过期工作区预设。返回 fingerprint、tool、workspace 供精确删除；只有用户启用对应自动审批设置才会使用预设。',
+    description: 'List the unexpired workspace presets the user created on approval cards. Returns fingerprint, tool and workspace for exact removal; a preset is only used when the user has enabled the matching auto-approval setting.',
     parameters: {}, output: textOutput, isConcurrencySafe: () => true,
     async execute() { return text(JSON.stringify(await deps.presets.list(), null, 2)); },
   } as never));
   tools.register(defineTool({
     name: 'remove_approval_rule',
-    description: '用户要求撤销审批预设时，用列表中的 fingerprint、tool、workspace 原值精确删除该预设。',
+    description: 'Remove one approval preset when the user asks to revoke it: pass fingerprint, tool and workspace back exactly as listed.',
     parameters: { fingerprint: { type: 'string' as const, required: true },
       tool: { type: 'string' as const, required: true }, workspace: { type: 'string' as const, required: true } },
     output: textOutput, isConcurrencySafe: () => true,
-    async execute(args: ApprovalRuleKey) { return text(await deps.removeApprovalRule(args) ? '已删除审批预设' : '未找到审批预设'); },
+    async execute(args: ApprovalRuleKey) { return text(await deps.removeApprovalRule(args) ? 'Approval preset removed' : 'Approval preset not found'); },
   } as never));
 
   tools.register(defineTool({
     name: 'remember',
-    description: '用户明确要求记住时保存长期记忆。content 第一句是关键点，其余为补充；session 留空存通用记忆，否则用会话 id。expiresDays 可选，到期后不再回忆。',
+    description: 'Save a long-term memory when the user explicitly asks you to remember something. The first sentence of content is the key point and the rest is supporting detail; leave session empty to store a general memory, otherwise pass the session id. expiresDays is optional; once it expires the memory is no longer recalled.',
     parameters: {
       content: { type: 'string' as const, required: true },
       tag: { type: 'string' as const }, session: { type: 'string' as const },
@@ -1459,7 +1838,7 @@ function registerJarvisTools(agentCtx: Context, entry: JarvisConfig, deps: Jarvi
 
   tools.register(defineTool({
     name: 'recall',
-    description: '回忆过去的约定或决定：查通用及指定会话的长期记忆。query 含审批、批准或拒绝时也查审批记录。只返回关键点、来源和日期；limit 默认5、最多10。',
+    description: 'Recall past agreements or decisions: searches general long-term memory and that of a named session. A query mentioning approval, approved, rejected or denied also searches approval records. Returns only the key point, source and date; limit defaults to 5 and is capped at 10.',
     parameters: {
       query: { type: 'string' as const, required: true }, session: { type: 'string' as const },
       limit: { type: 'number' as const },
@@ -1471,7 +1850,7 @@ function registerJarvisTools(agentCtx: Context, entry: JarvisConfig, deps: Jarvi
 
   tools.register(defineTool({
     name: 'say_to_user',
-    description: '用贾维斯自己的声音口播给用户一句话(带提示音)。一两句,别读代码/路径/markdown。',
+    description: 'Speak one line to the user in Jarvis\'s own voice (with a chime). One or two sentences; never read out code, paths or Markdown.',
     parameters: { text: { type: 'string' as const, required: true } },
     output: textOutput,
     isConcurrencySafe: () => true,
@@ -1479,13 +1858,13 @@ function registerJarvisTools(agentCtx: Context, entry: JarvisConfig, deps: Jarvi
       const line = String(args.text ?? '').trim();
       if (!line) throw new Error('say_to_user: text must not be empty');
       const how = await deps.say(line);
-      return text(how === 'muted' ? '用户已静音,没有播放' : how === 'failed' ? '播放失败' : '已播放');
+      return text(how === 'muted' ? 'The user is muted, so nothing was played' : how === 'failed' ? 'Playback failed' : 'Played');
     },
   } as never));
 
   tools.register(defineTool({
     name: 'ask_user',
-    description: '问用户一个问题并等待回答(悬浮窗和 DSH 窗口都会弹出)。有固定选项时给 choices。续做通知必须同时传其中的 session 和 task，让不用了关闭正确任务。',
+    description: 'Ask the user a question and wait for the answer (it pops up in both the panel and the DSH window). Pass choices when there are fixed options. A continuation notice must also pass the session and task it carries, so that declining closes the right task.',
     parameters: {
       question: { type: 'string' as const, required: true },
       choices: { type: 'array' as const, items: { type: 'string' as const } },
@@ -1503,15 +1882,15 @@ function registerJarvisTools(agentCtx: Context, entry: JarvisConfig, deps: Jarvi
         throw new Error('ask_user: continuation needs both session and task');
       }
       const answer = args.session && args.task
-        ? await deps.ask(question, ['继续', '不用了'], exec, { session: args.session, task: args.task })
+        ? await deps.ask(question, ['Continue', 'No thanks'], exec, { session: args.session, task: args.task })
         : await deps.ask(question, choices, exec);
-      return text(answer ? `用户回答:${answer}` : '用户没有给出回答');
+      return text(answer ? `User answered: ${answer}` : 'The user gave no answer');
     },
   } as never));
 
   tools.register(defineTool({
     name: 'inject_to_session',
-    description: '向托管会话发内容,对方会立刻开始处理。target 不能是自己,且必须在托管集里。',
+    description: 'Send content to a managed session; it starts working on it immediately. The target cannot be yourself and must be in the managed set.',
     parameters: { session: { type: 'string' as const, required: true }, message: { type: 'string' as const, required: true } },
     output: textOutput,
     isConcurrencySafe: () => true,
@@ -1519,7 +1898,7 @@ function registerJarvisTools(agentCtx: Context, entry: JarvisConfig, deps: Jarvi
       if (!args.session.trim() || !args.message.trim()) throw new Error('inject_to_session: session/message must not be empty');
       if (args.session === selfId) throw new Error('inject_to_session: cannot target self');
       if (!deps.managed.has(args.session)) {
-        throw new Error('inject_to_session: 该会话不在托管集,请先让用户把它交给你(manage_session)');
+        throw new Error('inject_to_session: that session is not in the managed set — have the user hand it to you first (manage_session)');
       }
       const target = (agentCtx as any).get?.('agents')?.get?.(args.session);
       if (!target) throw new Error('inject_to_session: target not found');
@@ -1527,18 +1906,18 @@ function registerJarvisTools(agentCtx: Context, entry: JarvisConfig, deps: Jarvi
         id: MessageId(`jarvis-${Date.now().toString(36)}`),
         role: 'user',
         content: [{ type: 'text', text: withNarrationNote(args.message, deps.narration(args.session)) }],
-        source: { kind: 'plugin', plugin: 'dsh-harness-jarvis', form: 'notice', summary: 'jarvis inject' },
+        source: { kind: 'user' },
       };
       const how = deliver(target, note);
       if (!how) throw new Error('inject_to_session: target accepts no messages');
       deps.ledger.open(args.session, args.message);
-      return text(how === 'steer' ? '已插入对方正在进行的这一轮' : '已发送,对方开始处理');
+      return text(how === 'steer' ? 'Injected into the turn already in progress' : 'Sent; the other session has started working');
     },
   } as never));
 
   tools.register(defineTool({
     name: 'list_managed',
-    description: '列出托管集里的会话,以及可以交给你的其他会话(标题、工作区、状态、id)。',
+    description: 'List the sessions in the managed set plus the other sessions you could be given (title, workspace, status, id).',
     parameters: {},
     output: textOutput,
     isConcurrencySafe: () => true,
@@ -1547,28 +1926,28 @@ function registerJarvisTools(agentCtx: Context, entry: JarvisConfig, deps: Jarvi
       const mine = rows.filter((r) => r.managed);
       const others = rows.filter((r) => !r.managed);
       return text([
-        `托管中(${mine.length}):`, ...(mine.length ? mine.map(describeSession) : ['(无)']),
-        `可交给你的其他会话(${others.length}):`, ...(others.length ? others.map(describeSession) : ['(无)']),
+        `Managed (${mine.length}):`, ...(mine.length ? mine.map(describeSession) : ['(none)']),
+        `Other sessions you could be given (${others.length}):`, ...(others.length ? others.map(describeSession) : ['(none)']),
       ].join('\n'));
     },
   } as never));
 
   tools.register(defineTool({
     name: 'manage_session',
-    description: '把一个会话纳入托管集(用户明确说交给你时才用)。session 用 list_managed 里的 id。',
+    description: 'Add a session to the managed set (only when the user explicitly hands it to you). Use the id from list_managed for session.',
     parameters: { session: { type: 'string' as const, required: true } },
     output: textOutput,
     isConcurrencySafe: () => true,
     async execute(args: { session: string }) {
       if (args.session === selfId) throw new Error('manage_session: cannot manage self');
-      if (await deps.setManaged(args.session, true) === 'not-found') throw new Error('manage_session: 找不到这个会话');
-      return text('已纳入托管');
+      if (await deps.setManaged(args.session, true) === 'not-found') throw new Error('manage_session: no such session');
+      return text('Now managed');
     },
   } as never));
 
   tools.register(defineTool({
     name: 'set_session_narration',
-    description: '切换托管会话的播报方式：self 让会话自己用 speak 汇报结果（省 token），relay 由你总结后转述；default 恢复为用户设置里的默认值。',
+    description: 'Switch how a managed session reports its results: self has the session report with speak itself (saves tokens), relay has you summarise and retell it, and default restores the default from the user\'s settings.',
     parameters: {
       session: { type: 'string' as const, required: true },
       narration: { type: 'string' as const, required: true },
@@ -1577,21 +1956,21 @@ function registerJarvisTools(agentCtx: Context, entry: JarvisConfig, deps: Jarvi
     isConcurrencySafe: () => true,
     async execute(args: { session: string; narration: string }) {
       const narration = args.narration === 'default' ? undefined : args.narration;
-      if (narration !== undefined && !isNarration(narration)) throw new Error('set_session_narration: narration 只能是 self / relay / default');
-      if (deps.setNarration(args.session, narration) === 'not-managed') throw new Error('set_session_narration: 该会话不在托管集');
-      return text(deps.narration(args.session) === 'self' ? '已改为会话自己汇报' : '已改为由你转述');
+      if (narration !== undefined && !isNarration(narration)) throw new Error('set_session_narration: narration must be self / relay / default');
+      if (deps.setNarration(args.session, narration) === 'not-managed') throw new Error('set_session_narration: that session is not in the managed set');
+      return text(deps.narration(args.session) === 'self' ? 'The session now reports for itself' : 'You now retell its results');
     },
   } as never));
 
   tools.register(defineTool({
     name: 'release_session',
-    description: '把一个会话移出托管集。',
+    description: 'Remove a session from the managed set.',
     parameters: { session: { type: 'string' as const, required: true } },
     output: textOutput,
     isConcurrencySafe: () => true,
     async execute(args: { session: string }) {
       await deps.setManaged(args.session, false);
-      return text('已移出托管');
+      return text('No longer managed');
     },
   } as never));
 }

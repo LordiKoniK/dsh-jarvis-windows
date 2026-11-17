@@ -21,7 +21,7 @@ describe('等价类', () => {
     const prompt = calls[0].messages[0].content[0].text;
     for (const text of ['用哪种缩进', '四空格', original, '项目使用两空格']) assert.ok(prompt.includes(text));
     assert.equal(calls[0].purpose, 'jarvis-ask-intercept');
-    assert.match(calls[0].system, /低风险/); assert.match(calls[0].system, /不可信/);
+    assert.match(calls[0].system, /low-risk/); assert.match(calls[0].system, /untrusted/);
   });
   it('answers all questions only after all choices are validated', async () => {
     const question = req().questions[0];

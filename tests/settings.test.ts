@@ -7,9 +7,10 @@ const defaults = Config({}) as JarvisSettings;
 describe('等价类', () => {
   it('merges editable values, trims strings, copies greetings and preserves the base', () => {
     const greetings = ['  你好。 ', '欢迎。'];
-    const merged = mergeSettings(defaults, { provider: ' custom ', model: ' test ', edgeVoice: ' voice ', greetings,
+    const merged = mergeSettings(defaults, { provider: ' custom ', model: ' test ', reasoningEffort: ' high ',
+      edgeVoice: ' voice ', greetings,
       judgeEnabled: false, judgeProvider: ' other ', judgeModel: ' judge ', judgeTimeoutMs: 30000, maxContinueRounds: 4 });
-    assert.deepEqual(merged, { provider: 'custom', model: 'test', edgeVoice: 'voice', greetings: ['你好。', '欢迎。'],
+    assert.deepEqual(merged, { provider: 'custom', model: 'test', reasoningEffort: 'high', edgeVoice: 'voice', greetings: ['你好。', '欢迎。'],
       judgeEnabled: false, askInterception: false, autoApprove: 'off', managedNarration: 'self', judgeProvider: 'other', judgeModel: 'judge', judgeTimeoutMs: 30000, maxContinueRounds: 4 });
     assert.notEqual(merged.greetings, greetings);
     assert.equal(defaults.judgeEnabled, true);
@@ -34,8 +35,11 @@ describe('边界值', () => {
     assert.equal(mergeSettings(defaults, { judgeTimeoutMs: timeout }).judgeTimeoutMs, timeout);
   });
   it('blank required strings fall back to base', () => {
-    const value = mergeSettings(defaults, { provider: '', model: '  ', edgeVoice: '\n' });
+    const value = mergeSettings(defaults, { provider: '', model: '  ', reasoningEffort: ' ', edgeVoice: '\n' });
     assert.equal(value.provider, defaults.provider); assert.equal(value.model, defaults.model); assert.equal(value.edgeVoice, defaults.edgeVoice);
+    // Empty effort must survive as empty: DSH resolves its own default, and an
+    // explicit value here would silently change the agent.
+    assert.equal(value.reasoningEffort, '');
   });
 });
 describe('异常路径', () => {

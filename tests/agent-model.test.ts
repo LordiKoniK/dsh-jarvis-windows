@@ -47,10 +47,11 @@ afterEach(() => {
 describe('agent model auto-resolution', () => {
   it('empty provider and model resolve to the first adapter and its first model', async () => {
     start({
-      agentLoop: {
-        createAgent: (_owner: unknown, opts: any) => {
+      agents: {
+        get: () => undefined,
+        create: async (opts: any) => {
           created.push({ sessionId: opts.sessionId, agentOptions: opts.agentOptions });
-          return Promise.resolve({ agent: { followup: () => {} }, dispose: () => {} });
+          return { agent: { followup: () => {} }, dispose: () => {} };
         },
         resume: () => Promise.reject(new Error('should not resume')),
       },
@@ -67,10 +68,11 @@ describe('agent model auto-resolution', () => {
 
   it('explicit provider and model are kept as-is', async () => {
     start({
-      agentLoop: {
-        createAgent: (_owner: unknown, opts: any) => {
+      agents: {
+        get: () => undefined,
+        create: async (opts: any) => {
           created.push({ sessionId: opts.sessionId, agentOptions: opts.agentOptions });
-          return Promise.resolve({ agent: { followup: () => {} }, dispose: () => {} });
+          return { agent: { followup: () => {} }, dispose: () => {} };
         },
         resume: () => Promise.reject(new Error('should not resume')),
       },
@@ -87,10 +89,11 @@ describe('agent model auto-resolution', () => {
 
   it('model alone auto-fills from the explicit provider', async () => {
     start({
-      agentLoop: {
-        createAgent: (_owner: unknown, opts: any) => {
+      agents: {
+        get: () => undefined,
+        create: async (opts: any) => {
           created.push({ sessionId: opts.sessionId, agentOptions: opts.agentOptions });
-          return Promise.resolve({ agent: { followup: () => {} }, dispose: () => {} });
+          return { agent: { followup: () => {} }, dispose: () => {} };
         },
         resume: () => Promise.reject(new Error('should not resume')),
       },
@@ -103,5 +106,98 @@ describe('agent model auto-resolution', () => {
     assert.equal(created.length, 1);
     assert.equal(created[0].agentOptions.provider, 'bailian');
     assert.equal(created[0].agentOptions.model, 'qwen-max');
+  });
+
+  it('an unset reasoning effort is not passed at all, so DSH resolves its own default', async () => {
+    start({
+      agents: {
+        get: () => undefined,
+        create: async (opts: any) => {
+          created.push({ sessionId: opts.sessionId, agentOptions: opts.agentOptions });
+          return { agent: { followup: () => {} }, dispose: () => {} };
+        },
+        resume: () => Promise.reject(new Error('should not resume')),
+      },
+      llm: { adapters: new Map([['zhipu', {}]]), listModels: () => [{ id: 'glm-9' }] },
+    }, { provider: 'zhipu', model: 'glm-9' });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(created.length, 1);
+    assert.deepEqual(created[0].agentOptions, { provider: 'zhipu', model: 'glm-9' });
+    // Not merely empty: the key must be absent, because an empty string is a
+    // different request from no request.
+    assert.ok(!('reasoningEffort' in created[0].agentOptions));
+  });
+
+  it('a stored session is resumed instead of created, and carries the same options', async () => {
+    const resumeOpts: any[] = [];
+    start({
+      agents: {
+        get: () => undefined,
+        create: () => Promise.reject(new Error('should not create: the session is stored')),
+        resume: async (opts: any) => {
+          resumeOpts.push(opts.agentOptions);
+          return { agent: { followup: () => {} }, dispose: () => {} };
+        },
+      },
+      // A live session is what makes the resolve path choose resume.
+      sessions: { get: (id: string) => id === 'jarvis' ? { id } : undefined },
+      llm: { adapters: new Map([['zhipu', {}]]), listModels: () => [{ id: 'glm-9' }] },
+    }, { provider: 'zhipu', model: 'glm-9', reasoningEffort: ' high ' });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(resumeOpts.length, 1, 'a stored session must be resumed');
+    assert.deepEqual(resumeOpts[0], { provider: 'zhipu', model: 'glm-9', reasoningEffort: 'high' });
+    assert.equal(created.length, 0);
+  });
+
+  it('configured reasoning effort reaches create, trimmed', async () => {
+    const createOpts: any[] = [];
+    start({
+      agents: {
+        get: () => undefined,
+        create: async (opts: any) => {
+          createOpts.push(opts.agentOptions);
+          return { agent: { followup: () => {} }, dispose: () => {} };
+        },
+        resume: () => Promise.reject(new Error('should not resume')),
+      },
+      llm: { adapters: new Map([['zhipu', {}]]), listModels: () => [{ id: 'glm-9' }] },
+    }, { provider: 'zhipu', model: 'glm-9', reasoningEffort: ' high ' });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(createOpts.length, 1);
+    assert.deepEqual(createOpts[0], { provider: 'zhipu', model: 'glm-9', reasoningEffort: 'high' });
+  });
+
+  it('a failed creation over a stored session falls back to resume', async () => {
+    const resumeOpts: any[] = [];
+    start({
+      agents: {
+        get: () => undefined,
+        // No live session, so resolve tries create; DSH refuses an id whose
+        // stored history survived a failed creation, and resume is the retry.
+        create: () => Promise.reject(new Error('session "jarvis" already exists')),
+        resume: async (opts: any) => {
+          resumeOpts.push(opts.agentOptions);
+          return { agent: { followup: () => {} }, dispose: () => {} };
+        },
+      },
+      llm: { adapters: new Map([['zhipu', {}]]), listModels: () => [{ id: 'glm-9' }] },
+    }, { provider: 'zhipu', model: 'glm-9' });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(resumeOpts.length, 1);
+    assert.deepEqual(resumeOpts[0], { provider: 'zhipu', model: 'glm-9' });
+  });
+
+  it('any other creation failure is reported instead of retried', async () => {
+    let resumed = false;
+    start({
+      agents: {
+        get: () => undefined,
+        create: () => Promise.reject(new Error('provider unavailable')),
+        resume: () => { resumed = true; return Promise.resolve({ agent: {} }); },
+      },
+      llm: { adapters: new Map([['zhipu', {}]]), listModels: () => [{ id: 'glm-9' }] },
+    }, { provider: 'zhipu', model: 'glm-9' });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(resumed, false);
   });
 });

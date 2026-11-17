@@ -1,6 +1,6 @@
 import { MemoryStore, parseMemory, type LongEntry } from './store.ts';
 
-const HEADER = '## 长期记忆';
+const HEADER = '## Long-term memory';
 /** Stable newest-first ordering; no query, detail, tags or per-session content enters L1. */
 export function renderMemorySection(entries: LongEntry[], now = Date.now()): string {
   const latest = entries.filter(entry => entry.key.trim() && (!entry.expires || Date.parse(entry.expires) > now))

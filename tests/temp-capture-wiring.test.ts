@@ -15,8 +15,9 @@ beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'jv-temp-wiring-')); listeners = new Map(); tools = new Map();
   await writeFile(join(root, 'managed.json'), '["worker"]');
   const services: Record<string, any> = {
-    agents: new Map([['worker', { status: 'idle' }]]),
-    agentLoop: { createAgent: async (_: unknown, options: any) => { options.setup(ctx); return { agent: { followup() {} } }; } },
+    agents: { get: (id: string) => id === 'worker' ? { status: 'idle' } : undefined,
+      list: () => ['worker'],
+      create: async (options: any) => { options.setup(ctx, undefined); return { agent: { followup() {} } }; } },
   };
   const ctx: any = { get: (name: string) => services[name], provide() {},
     on: (name: string, fn: any) => listeners.set(name, fn),

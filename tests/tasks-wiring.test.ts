@@ -53,17 +53,16 @@ beforeEach(async () => {
   }));
   syncBuiltinESMExports();
   const services: Record<string, any> = {
-    agents: workers,
+    agents: { get: (id: string) => workers.get(id), list: () => [...workers.keys()], create: async (options: any) => {
+      options.setup(ctx, undefined);
+      return { agent: jarvis };
+    } },
     llm: { stream: (options: any) => { llmRequests.push(options); return llmStream(options); } },
     userQuestions: { ask: async (request: any) => {
       questions.push(request);
       return { answers: [{ selected: [selected] }] };
     } },
     webServer: { register: (route: any) => { handler = route.handler; } },
-    agentLoop: { createAgent: async (_owner: unknown, options: any) => {
-      options.setup(ctx);
-      return { agent: jarvis };
-    } },
   };
   const ctx: any = {
     get: (name: string) => services[name],
@@ -212,7 +211,7 @@ describe('等价类', () => {
     await settled(() => announcements.length === 2);
     assert.deepEqual(announcements.map(a => a[0]).sort(), ['a', 'b']);
     for (const [session, text, options] of announcements) {
-      assert.equal(text, `${session}：测试已修复`);
+      assert.equal(text, `${session}: 测试已修复`);
       assert.equal(options.title, session);
       assert.equal(options.immediate, false);
     }
@@ -300,7 +299,7 @@ describe('等价类', () => {
     });
     assert.match(answer.text, /继续/);
     assert.equal(questions.length, 1);
-    assert.deepEqual(questions[0].questions[0].options, [{ label: '继续' }, { label: '不用了' }]);
+    assert.deepEqual(questions[0].questions[0].options, [{ label: 'Continue' }, { label: 'No thanks' }]);
     await tools.get('inject_to_session').execute({ session: 'a', message: '补齐回归测试并验证' });
     assert.equal(tasks().length, 1);
     assert.equal(tasks()[0].id, original.id);
@@ -383,7 +382,7 @@ describe('边界值', () => {
     await tools.get('inject_to_session').execute({ session: 'a', message: '执行' });
     event('a', 'turn/end', 'completed');
     await settled(() => announcements.length === 1);
-    assert.match(announcements[0][1], /还没做完/);
+    assert.match(announcements[0][1], /isn't done yet/);
     assert.equal(announcements[0][2].immediate, true);
   });
 
@@ -498,7 +497,7 @@ describe('异常路径', () => {
     await settled(() => tasks()[0]?.status === 'unsatisfied');
     const first = tools.get('ask_user').execute({ question: '第一问' });
     const second = tools.get('ask_user').execute({ question: '旧问题', session: 'a', task: tasks()[0].id });
-    const rejected = assert.rejects(second, /任务已变化/);
+    const rejected = assert.rejects(second, /has changed/);
     event('a', 'turn/start');
     release({ answers: [] });
     await first;
@@ -599,7 +598,7 @@ describe('播报模式', () => {
     it('默认 self：转发附 speak 汇报要求，任务原文不带附言，贾维斯不接管', async () => {
       await startPlugin({ managedNarration: 'self' });
       await tools.get('inject_to_session').execute({ session: 'a', message: '修好测试' });
-      assert.match(lastText(), /^修好测试\n\n（做完后如果有 speak 工具/);
+      assert.match(lastText(), /^修好测试\n\n\(When you are done, if a speak tool is available/);
       assert.equal(tasks()[0].request, '修好测试');
       assert.equal(context.get('jarvis').claimsTurnEnd('a'), false);
       assert.equal((await row('a')).narration, 'self');
@@ -629,9 +628,9 @@ describe('播报模式', () => {
       event('a', 'turn/end', 'completed');
       await settled(() => said.length === 1);
       assert.equal(llmRequests[0].purpose, 'jarvis-relay');
-      assert.match(llmRequests[0].system, /转述/);
+      assert.match(llmRequests[0].system, /retelling/);
       assert.match(llmRequests[0].messages[0].content[0].text, /已修复测试并通过验证/);
-      assert.match(said[0][1], /：它把测试都修好了$/);
+      assert.match(said[0][1], /: 它把测试都修好了$/);
       assert.equal(tasks()[0].status, 'done');
     });
 
@@ -702,7 +701,7 @@ describe('播报模式', () => {
 
     it('工具拒绝非法模式和未托管会话', async () => {
       await assert.rejects(tools.get('set_session_narration').execute({ session: 'a', narration: 'loud' }), /self \/ relay \/ default/);
-      await assert.rejects(tools.get('set_session_narration').execute({ session: 'ghost', narration: 'self' }), /不在托管集/);
+      await assert.rejects(tools.get('set_session_narration').execute({ session: 'ghost', narration: 'self' }), /not in the managed set/);
     });
 
     it('转述模型失败时退回"做完了"，不把空话读出来', async () => {
@@ -712,7 +711,7 @@ describe('播报模式', () => {
       await tools.get('inject_to_session').execute({ session: 'a', message: '修好测试' });
       event('a', 'turn/end', 'completed');
       await settled(() => said.length === 1);
-      assert.match(said[0][1], /做完了$/);
+      assert.match(said[0][1], /is done$/);
       assert.equal(tasks()[0].status, 'done');
     });
 

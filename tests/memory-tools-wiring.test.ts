@@ -12,7 +12,7 @@ beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'jv-memory-wiring-')); tools = new Map(); sections = new Map();
   const services: Record<string, any> = {
     systemPrompt: { section: (section: any) => sections.set(section.name, section) },
-    agentLoop: { createAgent: async (_owner: unknown, options: any) => { options.setup(ctx); return { agent: { followup() {} } }; } },
+    agents: { get: () => undefined, create: async (options: any) => { options.setup(ctx, undefined); return { agent: { followup() {} } }; } },
   };
   const ctx: any = {
     get: (name: string) => services[name], on() {}, provide() {},
@@ -31,8 +31,8 @@ describe('等价类', () => {
     const remember = tools.get('remember'), recall = tools.get('recall');
     assert.ok(remember); assert.ok(recall);
     const result = await remember.execute({ content: '用中文回复。详情不回传。', tag: '偏好', session: 'worker' });
-    assert.deepEqual(result, { text: '记住了' });
-    assert.deepEqual(remember.output.render({}, result), [{ type: 'text', text: '记住了' }]);
+    assert.deepEqual(result, { text: 'Remembered' });
+    assert.deepEqual(remember.output.render({}, result), [{ type: 'text', text: 'Remembered' }]);
     assert.deepEqual(remember.output.schema, tools.get('say_to_user').output.schema);
     assert.deepEqual(recall.output.schema, remember.output.schema);
     const found = await recall.execute({ query: '中文', session: 'worker' });
@@ -42,14 +42,14 @@ describe('等价类', () => {
   });
   it('人设明确什么时候remember与recall', () => {
     const text = sections.get('jarvis:persona').text();
-    assert.match(text, /用户说.*记住.*remember/); assert.match(text, /约定或决定.*recall/);
+    assert.match(text, /user says.*remember/); assert.match(text, /need to recall a past agreement or decision/);
   });
 });
 describe('边界值', () => {
   it('limit=0和空库经工具返回text对象', async () => {
-    assert.deepEqual(await tools.get('recall').execute({ query: '不存在' }), { text: '没有找到相关记忆' });
+    assert.deepEqual(await tools.get('recall').execute({ query: '不存在' }), { text: 'No matching memories found' });
     await tools.get('remember').execute({ content: 'test' });
-    assert.deepEqual(await tools.get('recall').execute({ query: 'test', limit: 0 }), { text: '没有找到相关记忆' });
+    assert.deepEqual(await tools.get('recall').execute({ query: 'test', limit: 0 }), { text: 'No matching memories found' });
   });
 });
 describe('异常路径', () => {

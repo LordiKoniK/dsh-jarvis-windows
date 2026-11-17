@@ -121,7 +121,7 @@ describe('边界值', () => {
     crash(); child.emit('exit', 1, null); child.emit('error', new Error('late error'));
     await flush();
     assert.equal(children.length, 4);
-    assert.deepEqual(speech, ['悬浮窗反复崩溃，已停止自动重启']);
+    assert.deepEqual(speech, ['The panel kept crashing, so automatic restarts have stopped']);
     assert.match(fs.readFileSync(join(dir, 'debug.log'), 'utf8'), /panel.*crash-limit/);
     assert.equal(timers.filter(timer => timer.unrefs === 1).length, 3);
   });

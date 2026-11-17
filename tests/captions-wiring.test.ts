@@ -3,36 +3,52 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { apply } from '../src/index.ts';
 let dir: string, handler: any, service: any, dispose: (() => void) | void;
-let toolMap: Map<string, any>, playback: any[], synthesis: any[], failSpawn: boolean;
+let toolMap: Map<string, any>, playback: any[], synthesis: any[], failSpawn: boolean, synthFails: boolean;
+/** The playback child is identified by its command, which is platform-specific:
+ *  macOS plays through afplay, Windows through a PowerShell WPF MediaPlayer. */
+const PLAYER = process.platform === 'win32' ? 'powershell.exe' : 'afplay';
 const flush = async () => { for (let i = 0; i < 4; i++) await new Promise(r => setImmediate(r)); };
 beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), 'jv-caption-wiring-'));
-  toolMap = new Map(); playback = []; synthesis = []; failSpawn = false;
-  mock.method(childProcess, 'spawn', (cmd: string) => {
-    if (cmd === 'afplay' && failSpawn) throw new Error('cannot spawn');
+  toolMap = new Map(); playback = []; synthesis = []; failSpawn = false; synthFails = false;
+  mock.method(childProcess, 'spawn', (cmd: string, args: string[]) => {
+    if (cmd === PLAYER && failSpawn) throw new Error('cannot spawn');
     const child = Object.assign(new EventEmitter(), { unref() {}, killed: false,
       kill() { this.killed = true; this.emit('close', 0); }, stderr: new EventEmitter() });
-    if (cmd === 'afplay') playback.push(child);
-    else if (cmd === process.execPath) synthesis.push(child);
+    if (cmd === PLAYER) playback.push(child);
+    else if (cmd === process.execPath) {
+      synthesis.push(child);
+      // Emulate the synth child the way the plugin judges it: the exit code and
+      // the output FILE. Deriving the path from argv keeps this honest — the
+      // cache key is the plugin's business, not the test's.
+      if (synthFails) return child;
+      setImmediate(() => {
+        writeFileSync(args[2], 'fake');
+        child.emit('close', 0);
+      });
+    }
     return child;
   });
   syncBuiltinESMExports();
   mock.method(globalThis, 'fetch', async () => ({ ok: false, status: 404 } as Response));
   const agent: any = { inject() {}, on() {}, tools: { register: (t: any) => toolMap.set(t.name, t) } };
   const services: any = { webServer: { port: 43210, register: (route: any) => { handler = route.handler; } },
-    agentLoop: { createAgent: (_: unknown, opts: any) => { opts.setup(agent); return new Promise(() => {}); } } };
+    agents: { get: () => undefined, create: (opts: any) => { opts.setup(agent); return new Promise(() => {}); } } };
   const ctx: any = { get: (name: string) => services[name],
     inject: (names: string[], cb: any) => { if (names.every(n => n in services)) cb(ctx); },
     provide: (_: string, s: any) => { service = s; }, on() {}, logger: { warn() {} } };
   dispose = apply(ctx, { jarvisSessionId: 'jarvis-caption', memoryRoot: dir, audioDir: dir,
     lockFile: join(dir, 'lock.json'), managedFile: join(dir, 'managed.json'), tasksFile: join(dir, 'tasks.json'),
-    runtimeFile: join(dir, 'runtime.json') });
+    runtimeFile: join(dir, 'runtime.json'),
+    // Explicit: this suite stubs the Node synth child, which is the edge
+    // backend's. The Windows default is now the local Kokoro backend, whose
+    // child is python.exe, so relying on the default would test the wrong thing.
+    ttsBackend: 'edge' });
   await request('/voice', { action: 'unmute' });
 });
 afterEach(async () => { dispose?.(); await flush(); mock.restoreAll(); syncBuiltinESMExports(); rmSync(dir, { force: true, recursive: true }); });
@@ -46,7 +62,6 @@ async function request(path: string, body?: unknown): Promise<any> {
   await pending; return JSON.parse(output || '{}');
 }
 async function say(line: string) {
-  writeFileSync(join(dir, `say-${createHash('sha1').update('zh-CN-YunjianNeural\0' + line).digest('hex').slice(0, 16)}.mp3`), 'fake');
   await toolMap.get('say_to_user').execute({ text: line }); await flush();
 }
 describe('等价类', () => {
@@ -74,13 +89,14 @@ describe('边界值', () => {
   });
 });
 describe('异常路径', () => {
-  it('afplay error and synchronous spawn failure both retire captions', async () => {
+  it('player error and synchronous spawn failure both retire captions', async () => {
     await say('异步错误'); playback[0].emit('error', new Error('playback')); await flush();
     assert.equal((await request('/state')).voice.speaking, false);
     failSpawn = true; await say('启动失败');
     assert.equal((await request('/state')).voice.speaking, false);
   });
   it('synthesis failure does not publish text or start playback', async () => {
+    synthFails = true;
     const pending = toolMap.get('say_to_user').execute({ text: '未缓存' }); await flush();
     synthesis[0].emit('close', 1); await pending;
     assert.equal(playback.length, 0); assert.equal((await request('/state')).voice.speaking, false);

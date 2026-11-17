@@ -10,8 +10,11 @@ export interface ChatLine {
 
 /** How /jarvis/input wraps text the user asked Jarvis to relay to a session. */
 export const routedInput = (session: string, text: string): string =>
-  `用户要求把以下内容发给会话 ${session}。请优化说法后用 inject_to_session 发送：\n\n${text}`;
-const ROUTED_INPUT = /^用户要求把以下内容发给会话 (\S+)。请优化说法后用 inject_to_session 发送：\n\n([\s\S]*)$/;
+  `The user asked for the following to be sent to session ${session}. Reword it, then send it with inject_to_session:\n\n${text}`;
+const ROUTED_INPUT = /^The user asked for the following to be sent to session (\S+)\. Reword it, then send it with inject_to_session:\n\n([\s\S]*)$/;
+/** The wrapper an earlier (Chinese) build wrote. It is stored in the session log,
+ *  so a message routed before the translation must still unwrap in the panel. */
+const LEGACY_ROUTED_INPUT = /^用户要求把以下内容发给会话 (\S+)。请优化说法后用 inject_to_session 发送：\n\n([\s\S]*)$/;
 
 export const CONVERSATION_LIMIT = 20;
 
@@ -39,7 +42,7 @@ export function toConversation(messages: readonly unknown[], limit = CONVERSATIO
       }
     }
     let text = texts.join('');
-    const routed = role === 'user' ? ROUTED_INPUT.exec(text) : null;
+    const routed = role === 'user' ? ROUTED_INPUT.exec(text) ?? LEGACY_ROUTED_INPUT.exec(text) : null;
     if (routed) { routedTo = routed[1]; text = routed[2] ?? ''; }
     if (!text && toolCalls.length === 0) return;
     out.push({

@@ -43,7 +43,7 @@ describe('等价类', () => {
     assert.deepEqual(said, []);
     tick(1500);
     await Promise.all([a, b]);
-    assert.deepEqual(said, ['hammer 和 anvil 都做完了']);
+    assert.deepEqual(said, ['hammer and anvil are both done']);
     const single = output.announce('a', '原文');
     tick(1500);
     await single;
@@ -54,7 +54,7 @@ describe('等价类', () => {
     const all = ['hammer', 'anvil', 'forge'].map(id => output.announce(id, '完成'));
     tick(1500);
     await Promise.all(all);
-    assert.deepEqual(said, ['hammer、anvil 等 3 个会话做完了']);
+    assert.deepEqual(said, ['hammer, anvil and 3 sessions in total are done']);
   });
   it('失败与未完成提醒立即播报，不加入完成合并', async () => {
     const { output, tick, said } = setup();
@@ -112,7 +112,7 @@ describe('边界值', () => {
     const d = output.announce('b', '完成', { title: '同名' });
     tick(1500);
     await Promise.all([c, d]);
-    assert.equal(said[1], '同名 和 同名 都做完了');
+    assert.equal(said[1], '同名 and 同名 are both done');
   });
   it('移出托管的排队问题丢弃，后续问题继续', async () => {
     const { output, managed } = setup();

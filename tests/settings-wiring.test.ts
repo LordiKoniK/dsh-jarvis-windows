@@ -16,16 +16,18 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'jv-settings-')); values = {}; hooks = undefined; installed = undefined;
   tools = new Map(); listeners = new Map(); calls = []; announcements = [];
   mock.method(OutputCoordinator.prototype, 'announce', async (_session: string, text: string) => { announcements.push(text); });
-  services = { agents: new Map([['worker', { status: 'idle', followup() {}, session: { deriveMessages: () => [
-    { role: 'assistant', content: [{ type: 'text', text: '完成工作' }] },
-  ] } }]]), llm: { async *stream(request: any) {
+  services = { agents: {
+    get: (id: string) => id === 'worker' ? { status: 'idle', followup() {}, session: { deriveMessages: () => [
+      { role: 'assistant', content: [{ type: 'text', text: '完成工作' }] },
+    ] } } : undefined,
+    list: () => ['worker'],
+    create(_opts: any) { options = _opts; _opts.setup(ctx, undefined); return new Promise(() => {}); },
+  }, llm: { async *stream(request: any) {
     calls.push(request); yield { type: 'text-delta', text: '{"verdict":"unsatisfied","summary":"未完成","missing":"补测试"}' };
     yield { type: 'finish', reason: { kind: 'stop' } };
   } }, settings: { installSection(owner: any, ns: string, schema: any, base: any, h: any) {
     installed = { owner, ns, schema, base }; hooks = h;
     h.setSource(() => ({ ...base, ...values })); h.onChange();
-  } }, agentLoop: { createAgent(_owner: any, opts: any) {
-    options = opts; opts.setup(ctx); return new Promise(() => {});
   } } };
   ctx = { get: (name: string) => services[name], provide(name: string, service: any) { services[name] = service; },
     inject(names: string[], callback: any) {
@@ -37,7 +39,10 @@ beforeEach(() => {
 afterEach(async () => { dispose?.(); await flush(); mock.restoreAll(); mock.timers.reset(); syncBuiltinESMExports(); rmSync(dir, { recursive: true, force: true }); });
 function start(extra = {}) {
   dispose = apply(ctx, { audioDir: dir, memoryRoot: dir, lockFile: join(dir, 'lock.json'), managedFile: join(dir, 'managed.json'),
-    tasksFile: join(dir, 'tasks.json'), runtimeFile: join(dir, 'runtime.json'), provider: 'base', model: 'base-model', managedNarration: 'relay', ...extra });
+    tasksFile: join(dir, 'tasks.json'), runtimeFile: join(dir, 'runtime.json'), provider: 'base', model: 'base-model', managedNarration: 'relay',
+    // Explicit: this suite asserts the edge-tts synth argv, and the platform
+    // default is the local Kokoro backend, whose child takes different flags.
+    ttsBackend: 'edge', ...extra });
 }
 async function turn() {
   await tools.get('manage_session').execute({ session: 'worker' });
@@ -49,16 +54,16 @@ const task = () => JSON.parse(readFileSync(join(dir, 'tasks.json'), 'utf8')).at(
 describe('等价类', () => {
   it('installs only supported editable fields in jarvis with restart descriptions', () => {
     start(); assert.equal(installed.ns, 'jarvis'); assert.equal(installed.owner, ctx);
-    assert.deepEqual(Object.keys(installed.schema.dict).sort(), ['provider','model','edgeVoice','greetings','askInterception','autoApprove','managedNarration','judgeEnabled','judgeProvider','judgeModel','judgeTimeoutMs','maxContinueRounds'].sort());
-    assert.match(installed.schema.dict.provider.meta.description, /重启 DSH/);
-    assert.match(installed.schema.dict.model.meta.description, /重启 DSH/);
+    assert.deepEqual(Object.keys(installed.schema.dict).sort(), ['provider','model','reasoningEffort','edgeVoice','greetings','askInterception','autoApprove','managedNarration','judgeEnabled','judgeProvider','judgeModel','judgeTimeoutMs','maxContinueRounds'].sort());
+    assert.match(installed.schema.dict.provider.meta.description, /DSH restart/);
+    assert.match(installed.schema.dict.model.meta.description, /DSH restart/);
     assert.ok(!('runtimeFile' in installed.base));
   });
   it('loads persisted models before creation and live judge changes on next turn', async () => {
     values = { provider: 'saved', model: 'saved-model', judgeProvider: 'judge', judgeModel: 'judge-model', maxContinueRounds: 0 };
     start(); assert.deepEqual(options.agentOptions, { provider: 'saved', model: 'saved-model' });
     await turn(); assert.equal(calls[0].provider, 'judge'); assert.equal(calls[0].model, 'judge-model');
-    assert.equal(task().status, 'done'); assert.match(announcements[0], /已经续了 0 次/);
+    assert.equal(task().status, 'done'); assert.match(announcements[0], /it has continued 0 times/);
     values = { judgeEnabled: false, managedNarration: 'self' }; hooks.onChange(); await turn(); assert.equal(calls.length, 1);
     assert.equal(task().status, 'done'); assert.equal(task().lastVerdict, undefined);
     assert.equal(announcements.length, 1);

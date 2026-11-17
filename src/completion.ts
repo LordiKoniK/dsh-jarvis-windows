@@ -88,13 +88,13 @@ export class CompletionJudge {
         reasonKind, max, judgeEnabled: this.deps.config().judgeEnabled, narration: narration(),
         stale: !active(action === 'fail' ? 'open' : 'judging') }))) return;
       if (action === 'fail') {
-        if (active('open')) await this.deps.say(`${title}失败了：${reasonKind === 'interrupted' ? '被中断' : FAILED_KINDS[reasonKind!]}`);
+        if (active('open')) await this.deps.say(`${title} failed: ${reasonKind === 'interrupted' ? 'it was interrupted' : FAILED_KINDS[reasonKind!]}`);
         return;
       }
       if (!active('judging')) return;
       let reply = '';
       try { reply = finalReply(this.deps.messages(session)); } catch { /* Missing session messages fall back to unclear. */ }
-      let verdict: Verdict = { verdict: 'unclear', summary: '做完了' };
+      let verdict: Verdict = { verdict: 'unclear', summary: 'it is done' };
       if (config.judgeEnabled && reply) {
         const prompt = judgePrompt(task, reply);
         const raw = await oneShot(this.deps.llm(), {
@@ -123,11 +123,11 @@ export class CompletionJudge {
         this.questions.set(session, { task: task.id, version });
         try {
           this.deps.notify([
-            `[会话 ${title}（id=${session}）本轮结束，判断未满足]`,
-            `原始需求：${task.request}`,
-            `缺少：${verdict.missing}`,
-            `请用 ask_user 问用户是否让它继续（选项：继续 / 不用了），同时传 session=${JSON.stringify(session)}、task=${JSON.stringify(task.id)}。`,
-            '用户选继续，就用 inject_to_session 发一条具体的续做指令；选不用了就结束。不要未经用户同意就续做。',
+            `[Session ${title} (id=${session}) finished this turn, judgement unsatisfied]`,
+            `Original request: ${task.request}`,
+            `Missing: ${verdict.missing}`,
+            `Ask the user with ask_user whether to let it continue (options: Continue / No thanks), passing session=${JSON.stringify(session)} and task=${JSON.stringify(task.id)}.`,
+            'If the user chooses to continue, send a concrete continuation instruction with inject_to_session; if they decline, finish. Do not continue without the user\'s consent.',
           ].join('\n'));
         } catch (error) {
           this.questions.delete(session);
@@ -137,9 +137,9 @@ export class CompletionJudge {
       } else {
         // Settle before awaiting speech so its completion cannot overwrite newer work.
         ledger.setStatus(task.id, 'done', recorded);
-        const text = result === 'satisfied' ? `${title}：${verdict.summary}`
-          : result === 'limit' ? `${title}还没做完：${verdict.missing}，已经续了 ${task.rounds} 次，交给你看看`
-          : `${title}做完了`;
+        const text = result === 'satisfied' ? `${title}: ${verdict.summary}`
+          : result === 'limit' ? `${title} isn't done yet: ${verdict.missing}; it has continued ${task.rounds} times, so it is over to you`
+          : `${title} is done`;
         await this.deps.say(text);
       }
     } catch (error) {
@@ -163,10 +163,13 @@ export class CompletionJudge {
       && question.version === (this.versions.get(session) ?? 0)
       && this.deps.ledger.current(session)?.id === taskId
       && this.deps.ledger.current(session)?.status === 'unsatisfied';
-    if (!active()) throw new Error('续做任务已变化，请不要发送旧的续做指令');
+    if (!active()) throw new Error('The continuation task has changed; do not send the old continuation instruction');
     const answer = await ask();
-    if (!active()) return '任务已变化，此回答已失效，请不要发送旧的续做指令';
-    if (/^不用了(?:；|$)/.test(answer.trim())) this.deps.ledger.setStatus(taskId, 'dropped');
+    if (!active()) return 'The task has changed, so this answer is no longer valid; do not send the old continuation instruction';
+    // "No thanks" is the decline label this build offers. A question persisted by
+    // the earlier Chinese build still shows its old decline label on the pending
+    // card, so the legacy spelling stays this build's only deliberate CJK literal.
+    if (/^(?:no thanks|不用了)(?:[;；]|$)/i.test(answer.trim())) this.deps.ledger.setStatus(taskId, 'dropped');
     if (answer.trim()) this.questions.delete(session);
     return answer;
   }

@@ -10,7 +10,7 @@ const cell = value => String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;')
  *  in the README. Fields belonging to mechanisms that are not part of the
  *  current release stay internal (still configurable, just not advertised). */
 export const PUBLIC_FIELDS = new Set([
-  'locale', 'audioDir', 'ttsBackend', 'edgeVoice', 'greetings', 'provider', 'model',
+  'locale', 'audioDir', 'ttsBackend', 'edgeVoice', 'greetings', 'provider', 'model', 'reasoningEffort',
 ]);
 
 /** Accept schemas as values so tests can use source Config without a build. */

@@ -56,8 +56,8 @@ export class OutputCoordinator {
     this.announcements.clear();
     if (!batch.length) return;
     const text = batch.length === 1 ? batch[0].text
-      : batch.length === 2 ? `${batch[0].title} 和 ${batch[1].title} 都做完了`
-      : `${batch[0].title}、${batch[1].title} 等 ${batch.length} 个会话做完了`;
+      : batch.length === 2 ? `${batch[0].title} and ${batch[1].title} are both done`
+      : `${batch[0].title}, ${batch[1].title} and ${batch.length} sessions in total are done`;
     void Promise.resolve().then(() => { if (!this.disposed) return this.deps.say(text); }).then(
       () => batch.forEach(item => item.waiters.forEach(waiter => waiter.resolve())),
       error => batch.forEach(item => item.waiters.forEach(waiter => waiter.reject(error))),

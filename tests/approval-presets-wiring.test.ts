@@ -22,7 +22,7 @@ beforeEach(() => {
   const services: any = { sessions: { get: () => ({ header: { cwd: workspace } }) },
     systemPrompt: { section: (section: any) => sections.set(section.name, section) },
     webServer: { port: 43210, register: (route: any) => { handler = route.handler; } },
-    agentLoop: { createAgent: (_: unknown, opts: any) => { opts.setup(ctx); return new Promise(() => {}); } } };
+    agents: { get: () => undefined, create: (_opts: any) => { _opts.setup(ctx); return new Promise(() => {}); } } };
   const ctx: any = { get: (name: string) => services[name],
     inject: (names: string[], cb: any) => { if (names.every(n => n in services)) cb(ctx); },
     provide() {}, on: (name: string, cb: any) => events.set(name, cb), tools: { register: (t: any) => tools.set(t.name, t) } };

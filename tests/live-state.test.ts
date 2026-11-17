@@ -74,7 +74,7 @@ describe('等价类', () => {
     assert.equal(live.isUnread(JARVIS), false);
     assert.equal(live.error(), null);
     live.turnEnded(JARVIS, { kind: 'max-tokens' });
-    assert.equal(live.error(), '输出超长被截断');
+    assert.equal(live.error(), 'the output was too long and was cut off');
     live.turnStarted(JARVIS);
     assert.equal(live.error(), null);
   });
@@ -243,7 +243,7 @@ describe('边界值', () => {
   it('错误文案截断到 80 字', () => {
     const { live } = setup();
     live.turnEnded(JARVIS, { kind: 'error', error: { message: 'x'.repeat(200) } });
-    assert.equal(live.error(), '模型调用失败：' + 'x'.repeat(80));
+    assert.equal(live.error(), 'the model call failed: ' + 'x'.repeat(80));
   });
 
   it('turn/end 缺少 reason 视为正常完成', () => {

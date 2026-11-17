@@ -17,7 +17,7 @@ const record = (): ApprovalRecord => ({
   session: { id: 'worker', cwd: '/workspace/project', managed: true },
   operation: { tool: 'bash', command: 'rm -rf node_modules', args: 'rm,-rf,node_modules' },
   context: '清理依赖', decision: { allow: false, source: 'user', reason: '' },
-  tier: { value: '', notes: 'Phase1:未分级' },
+  tier: { value: '', notes: 'Phase1: untiered' },
 });
 
 describe('等价类', () => {
@@ -41,8 +41,8 @@ describe('等价类', () => {
     assert.match(html, />worker — \/workspace\/project<\/session>/);
     assert.match(html, />bash: rm -rf node_modules<\/operation>/);
     assert.match(html, /<context>清理依赖<\/context>/);
-    assert.match(html, /<decision allow="false" source="user" reason="">拒绝<\/decision>/);
-    assert.match(html, /<tier value="" notes="Phase1:未分级"/);
+    assert.match(html, /<decision allow="false" source="user" reason="">denied<\/decision>/);
+    assert.match(html, /<tier value="" notes="Phase1: untiered"/);
   });
   it('创建缺失目录并完整原子发布 HTML', async () => {
     const path = await writeApproval(store(join(dir, 'memory', 'approvals')), record());

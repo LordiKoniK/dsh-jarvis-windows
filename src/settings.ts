@@ -4,6 +4,7 @@ import { isNarration, type Narration } from './narration.ts';
 export interface JarvisSettings {
   provider: string;
   model: string;
+  reasoningEffort: string;
   edgeVoice: string;
   greetings: string[];
   judgeEnabled: boolean;
@@ -21,7 +22,7 @@ export const SETTINGS_LIMITS = { minTimeout: 1000, maxTimeout: 120000, maxRounds
 /** Resolve a full snapshot against the immutable composition base, never the previous update. */
 export function mergeSettings(base: JarvisSettings, source: unknown): JarvisSettings {
   const raw = source && typeof source === 'object' && !Array.isArray(source) ? source as Record<string, unknown> : {};
-  const text = (key: 'provider' | 'model' | 'edgeVoice' | 'judgeProvider' | 'judgeModel', blank = false): string => {
+  const text = (key: 'provider' | 'model' | 'reasoningEffort' | 'edgeVoice' | 'judgeProvider' | 'judgeModel', blank = false): string => {
     const value = raw[key];
     return typeof value === 'string' && (blank || value.trim()) ? value.trim() : base[key];
   };
@@ -32,7 +33,7 @@ export function mergeSettings(base: JarvisSettings, source: unknown): JarvisSett
   const greetings = Array.isArray(raw.greetings) && raw.greetings.every(value => typeof value === 'string')
     ? raw.greetings as string[] : base.greetings;
   return {
-    provider: text('provider'), model: text('model'), edgeVoice: text('edgeVoice'),
+    provider: text('provider'), model: text('model'), reasoningEffort: text('reasoningEffort'), edgeVoice: text('edgeVoice'),
     greetings: greetings.map(value => value.trim()).filter(Boolean),
     judgeEnabled: typeof raw.judgeEnabled === 'boolean' ? raw.judgeEnabled : base.judgeEnabled,
     askInterception: typeof raw.askInterception === 'boolean' ? raw.askInterception : base.askInterception,
